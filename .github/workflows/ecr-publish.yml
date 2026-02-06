@@ -1,0 +1,250 @@
+name: Universal ECR Publisher
+
+on:
+  workflow_call:
+
+    # ─────────────────────────────
+    # INPUTS – FULLY CONFIGURABLE
+    # ─────────────────────────────
+    inputs:
+
+      # Core
+      ecr_repository:
+        type: string
+        required: true
+        description: "ECR repo name"
+
+      aws_region:
+        type: string
+        default: "ap-south-1"
+
+      java_version:
+        type: string
+        default: "11"
+
+      # ───── Build ─────
+      build_command:
+        type: string
+        default: "./gradlew clean build -x test jibDockerBuild"
+
+      enable_build:
+        type: boolean
+        default: true
+
+      # ───── Tagging ─────
+      tag_prefix:
+        type: string
+        default: "rc"
+
+      custom_tag:
+        type: string
+        required: false
+
+      # ───── Security ─────
+      enable_trivy:
+        type: boolean
+        default: true
+
+      approval_service_url:
+        type: string
+        default: "https://trivy.audit.jupiter.money"
+
+      tag_calculator:
+        type: string
+        default: |
+          SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-8)
+          echo "DOCKER_IMAGE_TAG=${{ inputs.tag_prefix }}-${SHORT_SHA}" >> $GITHUB_ENV
+
+      # ───── Docker ─────
+      enable_push:
+        type: boolean
+        default: true
+
+      # ───── API Store ─────
+      enable_api_store:
+        type: boolean
+        default: true
+
+      api_spec_path:
+        type: string
+        default: "./api/spec.yml"
+
+      # ───── Hooks ─────
+      pre_build_command:
+        type: string
+        default: ""
+
+      post_build_command:
+        type: string
+        default: ""
+
+      # ───── Generic Flags ─────
+      extra_env:
+        type: string
+        default: ""
+
+    # ─────────────────────────────
+    # SECRETS CONTRACT
+    # ─────────────────────────────
+    secrets:
+
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_ACCESS_KEY_SECRET:
+        required: true
+
+      APPROVAL_SERVICE_TOKEN:
+        required: false
+
+      CI_GITHUB_USER:
+        required: false
+      CI_GITHUB_TOKEN:
+        required: false
+
+      ARTIFACTORY_USER:
+        required: false
+      ARTIFACTORY_PASSWORD:
+        required: false
+
+      API_STORE_CLIENT_ID:
+        required: false
+      API_STORE_CLIENT_SECRET:
+        required: false
+
+# ─────────────────────────────────────────
+# GLOBAL ENV
+# ─────────────────────────────────────────
+env:
+  ECR_REGISTRY: 454518750364.dkr.ecr.ap-south-1.amazonaws.com
+  ECR_BULLET_REPOSITORY: ${{ inputs.ecr_repository }}
+  APPROVAL_SERVICE_URL: ${{ inputs.approval_service_url }}
+  CI_COMMIT_SHA: ${{ github.sha }}
+
+# ─────────────────────────────────────────
+# JOBS
+# ─────────────────────────────────────────
+
+jobs:
+
+  push:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ─────────────── PREP ───────────────
+
+      - uses: jm-imported-code/github-slug-action@v3.x
+      - uses: jm-imported-code/checkout@v1
+
+      - name: Inject Extra Env
+        if: inputs.extra_env != ''
+        run: echo "${{ inputs.extra_env }}" >> $GITHUB_ENV
+
+      # ─────────────── TAG STRATEGY ───────────────
+
+      - name: Compute Docker Tag
+        id: tag
+        shell: bash
+        run: |
+          echo "Running tag calculator..."
+      
+          cat << 'EOF' > tag_calculator.sh
+          ${{ inputs.tag_calculator }}
+          EOF
+      
+          bash tag_calculator.sh
+
+      
+      - name: Validate Tag
+        run: |
+          if [[ -z "$DOCKER_IMAGE_TAG" ]]; then
+            echo "❌ Tag calculator must export DOCKER_IMAGE_TAG"
+            exit 1
+          fi
+      
+          echo "Using tag: $DOCKER_IMAGE_TAG"
+
+      # ─────────────── JAVA SETUP ───────────────
+
+      - uses: jm-imported-code/setup-java@v1
+        with:
+          java-version: ${{ inputs.java_version }}
+
+      # ─────────────── AWS ───────────────
+
+      - name: Configure AWS credentials
+        uses: jm-imported-code/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to AWS ECR
+        uses: jm-imported-code/amazon-ecr-login@v1.0.1
+        with:
+          registries: 454518750364
+
+      # ─────────────── PRE BUILD HOOK ───────────────
+
+      - name: Pre Build Hook
+        if: ${{ inputs.pre_build_command != '' }}
+        run: ${{ inputs.pre_build_command }}
+
+      # ─────────────── BUILD ───────────────
+
+      - name: Build Image
+        if: ${{ inputs.enable_build }}
+        run: |
+          ${{ inputs.build_command }}
+
+          docker tag \
+            $ECR_REGISTRY/$ECR_BULLET_REPOSITORY:latest \
+            $ECR_REGISTRY/$ECR_BULLET_REPOSITORY:$DOCKER_IMAGE_TAG
+
+      # ─────────────── SECURITY ───────────────
+
+      - name: Run Trivy Scan
+        if: ${{ inputs.enable_trivy}}
+        uses: jupitermoney/security-automations@main
+        with:
+          tool: trivy
+          image-name: "$ECR_REGISTRY/$ECR_BULLET_REPOSITORY:$DOCKER_IMAGE_TAG"
+          approval-service-url: ${{ env.APPROVAL_SERVICE_URL }}
+          approval-service-token: ${{ secrets.APPROVAL_SERVICE_TOKEN }}
+
+      # ─────────────── POST BUILD ───────────────
+
+      - name: Post Build Hook
+        if: ${{ inputs.post_build_command != '' }}
+        run: ${{ inputs.post_build_command }}
+
+      # ─────────────── PUSH ───────────────
+
+      - name: Docker Push
+        if: ${{ inputs.enable_push }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_BULLET_REPOSITORY:$DOCKER_IMAGE_TAG
+
+      - name: Logout
+        if: always()
+        run: docker logout $ECR_REGISTRY
+
+
+  # ─────────────────────────────────────────
+  # API STORE – OPTIONAL
+  # ─────────────────────────────────────────
+
+  api-store:
+    needs: push
+    if: ${{ inputs.enable_api_store }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: jm-imported-code/checkout@v3
+
+      - name: API Store Push
+        uses: jupitermoney/push-to-api-store@v1.0.7
+        with:
+          api_store_client_id: ${{ secrets.API_STORE_CLIENT_ID }}
+          api_store_client_secret: ${{ secrets.API_STORE_CLIENT_SECRET }}
+          filepath: ${{ inputs.api_spec_path }}
