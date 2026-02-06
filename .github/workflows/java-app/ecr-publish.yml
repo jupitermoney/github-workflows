@@ -36,14 +36,7 @@ on:
         type: string
         default: "rc"
 
-      custom_tag:
-        type: string
-        required: false
-
       # ───── Security ─────
-      enable_trivy:
-        type: boolean
-        default: true
 
       approval_service_url:
         type: string
@@ -89,9 +82,9 @@ on:
     secrets:
 
       AWS_ACCESS_KEY_ID:
-        required: true
+        required: false
       AWS_ACCESS_KEY_SECRET:
-        required: true
+        required: false
 
       APPROVAL_SERVICE_TOKEN:
         required: false
@@ -215,7 +208,7 @@ jobs:
       # ─────────────── SECURITY ───────────────
 
       - name: Run Trivy Scan
-        if: ${{ inputs.enable_trivy}}
+        if: ${{ inputs.enable_push }}
         uses: jupitermoney/security-automations@main
         with:
           tool: trivy
