@@ -115,10 +115,22 @@ on:
 # GLOBAL ENV
 # ─────────────────────────────────────────
 env:
+  # Core ECR
   ECR_REGISTRY: 454518750364.dkr.ecr.ap-south-1.amazonaws.com
   ECR_BULLET_REPOSITORY: ${{ inputs.ecr_repository }}
+
+  # Security / Trivy
   APPROVAL_SERVICE_URL: ${{ inputs.approval_service_url }}
+  APPROVAL_SERVICE_TOKEN: ${{ secrets.APPROVAL_SERVICE_TOKEN }}
+
+  # Git Context
   CI_COMMIT_SHA: ${{ github.sha }}
+  GITHUB_USER: ${{ secrets.CI_GITHUB_USER }}
+  GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+
+  # Artifactory
+  ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+  ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
 
 # ─────────────────────────────────────────
 # JOBS
