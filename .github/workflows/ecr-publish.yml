@@ -117,7 +117,7 @@ on:
 env:
   # Core ECR
   ECR_REGISTRY: 454518750364.dkr.ecr.ap-south-1.amazonaws.com
-  ECR_BULLET_REPOSITORY: ${{ inputs.ecr_repository }}
+  ECR_REPOSITORY: ${{ inputs.ecr_repository }}
 
   # Security / Trivy
   APPROVAL_SERVICE_URL: ${{ inputs.approval_service_url }}
@@ -209,8 +209,8 @@ jobs:
           ${{ inputs.build_command }}
 
           docker tag \
-            $ECR_REGISTRY/$ECR_BULLET_REPOSITORY:latest \
-            $ECR_REGISTRY/$ECR_BULLET_REPOSITORY:$DOCKER_IMAGE_TAG
+            $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            $ECR_REGISTRY/$ECR_REPOSITORY:$DOCKER_IMAGE_TAG
 
       # ─────────────── SECURITY ───────────────
 
@@ -219,7 +219,7 @@ jobs:
         uses: jupitermoney/security-automations@main
         with:
           tool: trivy
-          image-name: "$ECR_REGISTRY/$ECR_BULLET_REPOSITORY:$DOCKER_IMAGE_TAG"
+          image-name: "$ECR_REGISTRY/$ECR_REPOSITORY:$DOCKER_IMAGE_TAG"
           approval-service-url: ${{ env.APPROVAL_SERVICE_URL }}
           approval-service-token: ${{ secrets.APPROVAL_SERVICE_TOKEN }}
 
@@ -234,7 +234,7 @@ jobs:
       - name: Docker Push
         if: ${{ inputs.enable_push }}
         run: |
-          docker push $ECR_REGISTRY/$ECR_BULLET_REPOSITORY:$DOCKER_IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$DOCKER_IMAGE_TAG
 
       - name: Logout
         if: always()
