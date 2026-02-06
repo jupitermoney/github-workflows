@@ -48,7 +48,7 @@ on:
 
 jobs:
   push:
-    uses: jupitermoney/github-workflows/.github/workflows/java-app/ecr-publish.yml@main
+    uses: jupitermoney/github-workflows/.github/workflows/java-app-ecr-publish.yml@main
 
     with:
       ecr_repository: your-service-name
