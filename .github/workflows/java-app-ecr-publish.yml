@@ -248,7 +248,7 @@ jobs:
       - uses: jm-imported-code/checkout@v3
 
       - name: API Store Push
-        uses: jupitermoney/push-to-api-store@v1.0.7
+        uses: jupitermoney/push-to-api-store@v1.0.11
         with:
           api_store_client_id: ${{ secrets.API_STORE_CLIENT_ID }}
           api_store_client_secret: ${{ secrets.API_STORE_CLIENT_SECRET }}
