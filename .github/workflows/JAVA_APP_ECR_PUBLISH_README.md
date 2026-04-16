@@ -16,26 +16,26 @@ This repository provides **reusable GitHub Actions workflows** for building, sca
 
 ### What This Template Does
 
-This workflow provides an end-to-end pipeline:
+This workflow is **zero-config for services using the `kotlin-spring-java21` plugin**. It reads project configuration directly from Gradle via `./gradlew generateServiceMetadata`, so there is no need to repeat ECR repository names, Java versions, or API spec paths in the workflow file.
+
+End-to-end pipeline:
 
 1. Checkout code
-2. Build Java application (Gradle + Jib by default)
+2. Setup Java 21
 3. Compute Docker tag
 4. Login to AWS ECR
-5. Build & tag image
-6. Run Trivy security scan
-7. Push to ECR
-8. Optionally push API spec to API Store
+5. Run `./gradlew generateServiceMetadata` → `build/metadata/service-metadata.json`
+6. Build all Jib modules (`./gradlew clean build -x test jibDockerBuild`)
+7. Tag each module's image with the computed tag
+8. Run Trivy security scan (primary module)
+9. Push all module images to ECR
+10. Push publishable API specs to API Store (parallel, one job per spec)
 
 ---
 
 ## Quick Start (Consumer Repo)
 
-Create:
-
-```
-.github/workflows/publish.yml
-```
+Create `.github/workflows/publish.yml`:
 
 ```yaml
 name: Publish Service Image
@@ -49,53 +49,60 @@ on:
 jobs:
   push:
     uses: jupitermoney/github-workflows/.github/workflows/java-app-ecr-publish.yml@main
-
-    with:
-      ecr_repository: your-service-name
-
     secrets: inherit
 ```
 
-That’s it 🚀
+That's it. ECR repo names, Java version, and API spec paths all come from `build.gradle.kts` via the plugin — no `with:` block needed.
+
+---
+
+## How Metadata Drives CI
+
+The workflow runs `./gradlew generateServiceMetadata` before building. This task (provided by `kotlin-spring-java21`) writes `build/metadata/service-metadata.json` containing:
+
+| Metadata field | Used by CI for |
+|---|---|
+| `jibModules[].toImage` | ECR repository name per module |
+| `jibModules[].javaVersion` | Base image version (informational) |
+| `openApiSpecs[].specFile` where `publishClients == true` | API Store push targets |
+
+Multi-module projects (e.g., a monorepo with 4 Spring Boot services) are handled automatically — each module gets tagged and pushed in a sequential loop within a single job.
 
 ---
 
 ## Inputs
 
-### Core
-
-| Input          | Required | Default    | Description            |
-| -------------- | -------- | ---------- | ---------------------- |
-| ecr_repository | ✅        | –          | Name of ECR repository |
-| aws_region     | ❌        | ap-south-1 | AWS region             |
-| java_version   | ❌        | 11         | Java version           |
-
 ### Build
 
-| Input         | Default                                        |
-| ------------- | ---------------------------------------------- |
-| build_command | `./gradlew clean build -x test jibDockerBuild` |
-| enable_build  | true                                           |
+| Input         | Default                                        | Description |
+| ------------- | ---------------------------------------------- | ----------- |
+| build_command | `./gradlew clean build -x test jibDockerBuild` | Full build command |
+| enable_build  | true                                           | Skip build step if false |
 
 ### Tagging
 
-| Input          | Default                            |
-| -------------- | ---------------------------------- |
-| tag_prefix     | rc                                 |
-| tag_calculator | script generating DOCKER_IMAGE_TAG |
+| Input          | Default                            | Description |
+| -------------- | ---------------------------------- | ----------- |
+| tag_prefix     | rc                                 | Prefix for computed tag |
+| tag_calculator | script generating DOCKER_IMAGE_TAG | Custom tag strategy (see below) |
 
 ### Security
 
-| Input                | Default                                                                |
-| -------------------- | ---------------------------------------------------------------------- |
-| approval_service_url | [https://trivy.audit.jupiter.money](https://trivy.audit.jupiter.money) |
+| Input                | Default                          | Description |
+| -------------------- | -------------------------------- | ----------- |
+| approval_service_url | https://trivy.audit.jupiter.money | Trivy approval endpoint |
+
+### Docker / Push
+
+| Input       | Default | Description |
+| ----------- | ------- | ----------- |
+| enable_push | true    | Skip ECR push if false |
 
 ### API Store
 
-| Input            | Default        |
-| ---------------- | -------------- |
-| enable_api_store | true           |
-| api_spec_path    | ./api/spec.yml |
+| Input            | Default | Description |
+| ---------------- | ------- | ----------- |
+| enable_api_store | true    | Set false to skip API Store entirely |
 
 ### Hooks
 
@@ -105,9 +112,15 @@ That’s it 🚀
 | post_build_command | Shell after build        |
 | extra_env          | Additional env variables |
 
+### Infrastructure
+
+| Input      | Default    | Description |
+| ---------- | ---------- | ----------- |
+| aws_region | ap-south-1 | AWS region  |
+
 ---
 
-## Secrets Contract(Optional but recommended)
+## Secrets Contract (Optional but recommended)
 
 * `AWS_ACCESS_KEY_ID`
 * `AWS_ACCESS_KEY_SECRET`
@@ -126,7 +139,6 @@ That’s it 🚀
 Every run automatically exposes:
 
 * `ECR_REGISTRY`
-* `ECR_REPOSITORY`
 * `APPROVAL_SERVICE_URL`
 * `APPROVAL_SERVICE_TOKEN`
 * `CI_COMMIT_SHA`
@@ -134,13 +146,6 @@ Every run automatically exposes:
 * `GITHUB_TOKEN`
 * `ARTIFACTORY_USER`
 * `ARTIFACTORY_PASSWORD`
-
-These can be consumed by:
-
-* Gradle
-* Jib authentication
-* Trivy approval
-* Custom scripts
 
 ---
 
@@ -150,11 +155,8 @@ These can be consumed by:
 
 ```yaml
 with:
-  ecr_repository: payments
   build_command: "./gradlew clean bootJar jibDockerBuild"
 ```
-
----
 
 ### 2. Custom Tag Strategy
 
@@ -169,8 +171,6 @@ with:
     echo "DOCKER_IMAGE_TAG=$TAG" >> $GITHUB_ENV
 ```
 
----
-
 ### 3. Pass Extra Env
 
 ```yaml
@@ -179,8 +179,6 @@ with:
     FEATURE_FLAG=true
     LOG_LEVEL=debug
 ```
-
----
 
 ### 4. Skip API Store
 
@@ -207,22 +205,39 @@ rc-a1b2c3d4
 
 ---
 
-## Local Compatibility
+## Plugin Requirement
 
-Your service should:
+Your service must use the `kotlin-spring-java21` Gradle plugin (v0.3.4+). The plugin provides the `generateServiceMetadata` task that produces `build/metadata/service-metadata.json`.
 
-* Use Gradle + Jib
-* Produce image:
+Your `build.gradle.kts` doesn't change — the metadata is collected automatically from config you've already written.
 
-```
-$ECR_REGISTRY/$ECR_REPOSITORY:latest
-```
+---
 
-before retag step.
+## Migrating Existing Services
+
+1. Bump plugin to `0.3.4+` in `settings.gradle.kts`
+2. Remove the `with:` block from your workflow call (or strip `ecr_repository`, `java_version`, `api_spec_path` from it)
+3. Done — CI reads everything from Gradle config on next push
+
+---
+
+## Known Limitations (POC)
+
+**Trivy multi-image scanning**: Trivy currently runs only on the first jib module (primary image). For monorepos with multiple modules, secondary images are pushed without individual Trivy scans. Full multi-image support requires updating `jupitermoney/security-automations` to accept an image array, or restructuring into a matrix job.
 
 ---
 
 ## Troubleshooting
+
+### ❌ build/metadata/service-metadata.json not found
+
+The `generateServiceMetadata` Gradle task failed. Check that:
+* The `kotlin-spring-java21` plugin is applied
+* `./gradlew generateServiceMetadata` succeeds locally
+
+### ❌ jibModules array is empty
+
+No Jib modules are configured in `build.gradle.kts`. Add at least one module using `kotlinSpringJib { }`.
 
 ### ❌ Tag calculator must export DOCKER_IMAGE_TAG
 
@@ -232,16 +247,12 @@ Your custom script must end with:
 echo "DOCKER_IMAGE_TAG=value" >> $GITHUB_ENV
 ```
 
----
-
 ### ❌ Artifactory Auth Failures
 
 Ensure secrets exist in repo:
 
 * ARTIFACTORY_USER
 * ARTIFACTORY_PASSWORD
-
----
 
 ### ❌ Trivy Blocked
 

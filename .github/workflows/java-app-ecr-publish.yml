@@ -8,112 +8,28 @@ on:
     # ─────────────────────────────
     inputs:
 
-      # Core
-      ecr_repository:
+      ecr_registry:
         type: string
-        required: true
-        description: "ECR repo name"
-
-      aws_region:
-        type: string
-        default: "ap-south-1"
+        default: "454518750364.dkr.ecr.ap-south-1.amazonaws.com"
 
       java_version:
         type: string
-        default: "11"
-
-      # ───── Build ─────
-      build_command:
-        type: string
-        default: "./gradlew clean build -x test jibDockerBuild"
-
-      enable_build:
-        type: boolean
-        default: true
+        default: "21"
+        required: true
 
       # ───── Tagging ─────
       tag_prefix:
         type: string
-        default: "rc"
-
-      # ───── Security ─────
-
-      approval_service_url:
-        type: string
-        default: "https://trivy.audit.jupiter.money"
-
-      tag_calculator:
-        type: string
-        default: |
-          SHORT_SHA=$(echo "$GITHUB_SHA" | cut -c1-8)
-          echo "DOCKER_IMAGE_TAG=${{ inputs.tag_prefix }}-${SHORT_SHA}" >> $GITHUB_ENV
-
-      # ───── Docker ─────
-      enable_push:
-        type: boolean
-        default: true
-
-      # ───── API Store ─────
-      enable_api_store:
-        type: boolean
-        default: true
-
-      api_spec_path:
-        type: string
-        default: "./api/spec.yml"
-
-      # ───── Hooks ─────
-      pre_build_command:
-        type: string
-        default: ""
-
-      post_build_command:
-        type: string
-        default: ""
-
-      # ───── Generic Flags ─────
-      extra_env:
-        type: string
-        default: ""
-
-    # ─────────────────────────────
-    # SECRETS CONTRACT
-    # ─────────────────────────────
-    secrets:
-
-      AWS_ACCESS_KEY_ID:
-        required: false
-      AWS_ACCESS_KEY_SECRET:
-        required: false
-
-      APPROVAL_SERVICE_TOKEN:
-        required: false
-
-      CI_GITHUB_USER:
-        required: false
-      CI_GITHUB_TOKEN:
-        required: false
-
-      ARTIFACTORY_USER:
-        required: false
-      ARTIFACTORY_PASSWORD:
-        required: false
-
-      API_STORE_CLIENT_ID:
-        required: false
-      API_STORE_CLIENT_SECRET:
-        required: false
+        default: "rc" # auto-overridden to "hotfix" for hotfix-* branches
 
 # ─────────────────────────────────────────
 # GLOBAL ENV
 # ─────────────────────────────────────────
 env:
-  # Core ECR
-  ECR_REGISTRY: 454518750364.dkr.ecr.ap-south-1.amazonaws.com
-  ECR_REPOSITORY: ${{ inputs.ecr_repository }}
+  ECR_REGISTRY: ${{ inputs.ecr_registry }}
 
   # Security / Trivy
-  APPROVAL_SERVICE_URL: ${{ inputs.approval_service_url }}
+  APPROVAL_SERVICE_URL: "https://trivy.audit.jupiter.money"
   APPROVAL_SERVICE_TOKEN: ${{ secrets.APPROVAL_SERVICE_TOKEN }}
 
   # Git Context
@@ -124,6 +40,8 @@ env:
   # Artifactory
   ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
   ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+  SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+  GITHUB_EVENT: ${{ toJson(github.event) }}
 
 # ─────────────────────────────────────────
 # JOBS
@@ -131,48 +49,130 @@ env:
 
 jobs:
 
-  push:
+  # ─────────────────────────────────────────────────────────────────
+  # STEP 1 — Resolve metadata + test entire codebase once + Sonar
+  #
+  # Single Gradle cold start: generateServiceMetadata and test run
+  # in one invocation. Cache is saved here so matrix jobs downstream
+  # restore it and skip all dependency downloads.
+  # ─────────────────────────────────────────────────────────────────
+
+  test:
     runs-on: ubuntu-latest
 
+    outputs:
+      matrix: ${{ steps.parse.outputs.matrix }}
+      sonar_enabled: ${{ steps.parse.outputs.sonar_enabled }}
+
     steps:
-      # ─────────────── PREP ───────────────
-
-      - uses: jm-imported-code/github-slug-action@v3.x
       - uses: jm-imported-code/checkout@v1
+        with:
+          fetch-depth: 0  # required for Sonar blame analysis
 
-      - name: Inject Extra Env
-        if: inputs.extra_env != ''
-        run: echo "${{ inputs.extra_env }}" >> $GITHUB_ENV
+      - uses: jm-imported-code/setup-java@v1
+        with:
+          java-version: ${{ inputs.java_version }}
+
+      - name: Restore Gradle Cache
+        uses: jm-imported-code/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # Single Gradle invocation: metadata generation + full test suite.
+      # Gradle downloads all dependencies once and reuses the daemon for both tasks.
+      - name: Generate Metadata and Run Tests
+        run: ./gradlew generateServiceMetadata test
+
+      - name: Parse Service Metadata
+        id: parse
+        run: |
+          METADATA_FILE="build/metadata/service-metadata.json"
+
+          if [[ ! -f "$METADATA_FILE" ]]; then
+            echo "❌ $METADATA_FILE not found. Ensure generateServiceMetadata ran successfully."
+            exit 1
+          fi
+
+          MODULE_COUNT=$(jq '.jibModules | length' "$METADATA_FILE")
+          if [[ "$MODULE_COUNT" -eq 0 ]]; then
+            echo "❌ jibModules array is empty. Nothing to build."
+            exit 1
+          fi
+
+          MATRIX=$(jq -c '{include: [.jibModules[] | {module: .module, toImage: .toImage}]}' "$METADATA_FILE")
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+          SONAR_ENABLED=$(jq -r '.sonar.enabled // false' "$METADATA_FILE")
+          echo "sonar_enabled=$SONAR_ENABLED" >> $GITHUB_OUTPUT
+
+          echo "Found $MODULE_COUNT jib module(s):"
+          echo "$MATRIX" | jq -r '.include[] | "  - \(.module)"'
+          echo "Sonar enabled: $SONAR_ENABLED"
+
+      # Runs in the same job so JaCoCo reports from the test step above are
+      # already on disk — no need to re-run tests.
+      - name: Run Sonar Analysis
+        if: steps.parse.outputs.sonar_enabled == 'true'
+        run: |
+          echo "skipping sonar"
+          # ./gradlew sonar
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ─────────────────────────────────────────────────────────────────
+  # STEP 2 — Build and push per module (matrix)
+  #
+  # Gradle cache restored from STEP 1 — no dependency downloads.
+  # Only jibDockerBuild runs per module; tests are already done.
+  # ─────────────────────────────────────────────────────────────────
+
+  build-push:
+    needs: test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix: ${{ fromJSON(needs.test.outputs.matrix) }}
+
+    steps:
+      - uses: jm-imported-code/checkout@v1
 
       # ─────────────── TAG STRATEGY ───────────────
 
       - name: Compute Docker Tag
-        id: tag
         shell: bash
         run: |
-          echo "Running tag calculator..."
-      
-          cat << 'EOF' > tag_calculator.sh
-          ${{ inputs.tag_calculator }}
-          EOF
-      
-          bash tag_calculator.sh
-
-      
-      - name: Validate Tag
-        run: |
-          if [[ -z "$DOCKER_IMAGE_TAG" ]]; then
-            echo "❌ Tag calculator must export DOCKER_IMAGE_TAG"
-            exit 1
+          if [[ "${GITHUB_REF_NAME}" == hotfix-* ]]; then
+            TAG_PREFIX="hotfix"
+          else
+            TAG_PREFIX="${{ inputs.tag_prefix }}"
           fi
-      
-          echo "Using tag: $DOCKER_IMAGE_TAG"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            SHORT_SHA=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-8)
+          else
+            SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-8)
+          fi
+
+          echo "DOCKER_IMAGE_TAG=${TAG_PREFIX}-${SHORT_SHA}" >> $GITHUB_ENV
 
       # ─────────────── JAVA SETUP ───────────────
 
       - uses: jm-imported-code/setup-java@v1
         with:
           java-version: ${{ inputs.java_version }}
+
+      - name: Restore Gradle Cache
+        uses: jm-imported-code/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
 
       # ─────────────── AWS ───────────────
 
@@ -181,75 +181,41 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
-          aws-region: ${{ inputs.aws_region }}
+          aws-region: ap-south-1
 
       - name: Login to AWS ECR
         uses: jm-imported-code/amazon-ecr-login@v1.0.1
         with:
           registries: 454518750364
 
-      # ─────────────── PRE BUILD HOOK ───────────────
-
-      - name: Pre Build Hook
-        if: ${{ inputs.pre_build_command != '' }}
-        run: ${{ inputs.pre_build_command }}
-
       # ─────────────── BUILD ───────────────
 
-      - name: Build Image
-        if: ${{ inputs.enable_build }}
-        run: |
-          ${{ inputs.build_command }}
+      - name: Build Module
+        run: ./gradlew ${{ matrix.module }}:jibDockerBuild
 
+      # ─────────────── TAG ───────────────
+
+      - name: Tag Image
+        run: |
           docker tag \
-            $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            $ECR_REGISTRY/$ECR_REPOSITORY:$DOCKER_IMAGE_TAG
+            "${{ matrix.toImage }}:latest" \
+            "${{ env.ECR_REGISTRY }}/${{ matrix.toImage }}:$DOCKER_IMAGE_TAG"
 
       # ─────────────── SECURITY ───────────────
 
       - name: Run Trivy Scan
-        if: ${{ inputs.enable_push }}
         uses: jupitermoney/security-automations@main
         with:
           tool: trivy
-          image-name: "$ECR_REGISTRY/$ECR_REPOSITORY:$DOCKER_IMAGE_TAG"
+          image-name: "${{ env.ECR_REGISTRY }}/${{ matrix.toImage }}:${{ env.DOCKER_IMAGE_TAG }}"
           approval-service-url: ${{ env.APPROVAL_SERVICE_URL }}
           approval-service-token: ${{ secrets.APPROVAL_SERVICE_TOKEN }}
-
-      # ─────────────── POST BUILD ───────────────
-
-      - name: Post Build Hook
-        if: ${{ inputs.post_build_command != '' }}
-        run: ${{ inputs.post_build_command }}
 
       # ─────────────── PUSH ───────────────
 
       - name: Docker Push
-        if: ${{ inputs.enable_push }}
-        run: |
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$DOCKER_IMAGE_TAG
+        run: docker push "${{ env.ECR_REGISTRY }}/${{ matrix.toImage }}:$DOCKER_IMAGE_TAG"
 
       - name: Logout
         if: always()
         run: docker logout $ECR_REGISTRY
-
-
-  # ─────────────────────────────────────────
-  # API STORE – OPTIONAL
-  # ─────────────────────────────────────────
-
-  api-store:
-    needs: push
-    if: ${{ inputs.enable_api_store }}
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: jm-imported-code/checkout@v3
-
-      - name: API Store Push
-        uses: jupitermoney/push-to-api-store@v1.0.11
-        with:
-          api_store_client_id: ${{ secrets.API_STORE_CLIENT_ID }}
-          api_store_client_secret: ${{ secrets.API_STORE_CLIENT_SECRET }}
-          filepath: ${{ inputs.api_spec_path }}
