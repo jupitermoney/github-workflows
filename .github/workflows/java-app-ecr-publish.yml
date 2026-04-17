@@ -82,10 +82,15 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      # Single Gradle invocation: metadata generation + full test suite.
-      # Gradle downloads all dependencies once and reuses the daemon for both tasks.
-      - name: Generate Metadata and Run Tests
-        run: ./gradlew generateServiceMetadata test
+      # Always runs — produces build/metadata/service-metadata.json which
+      # the parse step needs to build the matrix for build-push.
+      - name: Generate Service Metadata
+        run: ./gradlew generateServiceMetadata
+
+      # Skipped on pull_request events — PR validation is handled by java-app-pr-check.yml.
+      - name: Run Tests
+        if: github.event_name == 'push'
+        run: ./gradlew test
 
       - name: Parse Service Metadata
         id: parse
@@ -116,7 +121,7 @@ jobs:
       # Runs in the same job so JaCoCo reports from the test step above are
       # already on disk — no need to re-run tests.
       - name: Run Sonar Analysis
-        if: steps.parse.outputs.sonar_enabled == 'true'
+        if: github.event_name == 'push' && steps.parse.outputs.sonar_enabled == 'true'
         run: |
           echo "skipping sonar"
           # ./gradlew sonar
