@@ -150,15 +150,14 @@ jobs:
       - name: Compute Docker Tag
         shell: bash
         run: |
-          if [[ "${GITHUB_REF_NAME}" == hotfix-* ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            TAG_PREFIX="pr"
+            SHORT_SHA=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-8)
+          elif [[ "${GITHUB_REF_NAME}" == hotfix-* ]]; then
             TAG_PREFIX="hotfix"
+            SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-8)
           else
             TAG_PREFIX="${{ inputs.tag_prefix }}"
-          fi
-
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            SHORT_SHA=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-8)
-          else
             SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-8)
           fi
 
