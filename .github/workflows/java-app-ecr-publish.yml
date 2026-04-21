@@ -10,7 +10,7 @@ on:
 
       ecr_registry:
         type: string
-        default: "454518750364.dkr.ecr.ap-south-1.amazonaws.com"
+        default: "454518750364.dkr.ecr.ap-south-1.amazonaws.com" # add comment mentioning which aws account
 
       java_version:
         type: string
@@ -20,12 +20,12 @@ on:
       # ───── Tagging ─────
       tag_prefix:
         type: string
-        default: "rc" # auto-overridden to "hotfix" for hotfix-* branches
+        default: "rc" # auto-overridden to "hotfix" for hotfix-* branches # Remove, should be computed.
 
 # ─────────────────────────────────────────
 # GLOBAL ENV
 # ─────────────────────────────────────────
-env:
+env: # add the env variables we discussed https://jupitermoney.atlassian.net/wiki/spaces/~7120200844f5ce0a8d4d9296aca72b692dcdc7/pages/4102684673/RFC+Zero-Config+CI?focusedCommentId=4118216985
   ECR_REGISTRY: ${{ inputs.ecr_registry }}
 
   # Security / Trivy
@@ -42,6 +42,8 @@ env:
   ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
   SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
   GITHUB_EVENT: ${{ toJson(github.event) }}
+
+  # add the github token to push to metadata repo
 
 # ─────────────────────────────────────────
 # JOBS
@@ -87,11 +89,15 @@ jobs:
       - name: Generate Service Metadata
         run: ./gradlew generateServiceMetadata
 
+      # add `./gradlew validate` task
+
       # Skipped on pull_request events — PR validation is handled by java-app-pr-check.yml.
       - name: Run Tests
         if: github.event_name == 'push'
         run: ./gradlew test
-
+      
+      # should we consider doing 'build' separately first?
+      
       - name: Parse Service Metadata
         id: parse
         run: |
