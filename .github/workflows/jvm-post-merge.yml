@@ -69,14 +69,14 @@ jobs:
       sonar_enabled: ${{ steps.metadata.outputs.sonar_enabled }}
 
     steps:
-      - uses: ./.github/actions/gradle-setup
+      - uses: jupitermoney/github-workflows/.github/actions/gradle-setup@main
         with:
           java-version: ${{ inputs.java_version }}
           fetch-depth: 0  # required for Sonar blame analysis
 
       - name: Generate Service Metadata
         id: metadata
-        uses: ./.github/actions/generate-metadata
+        uses: jupitermoney/github-workflows/.github/actions/generate-metadata@main
 
       # Skipped on pull_request events — PR validation is handled by jvm-app-pr-check.yml.
       - name: Run Tests
@@ -110,7 +110,7 @@ jobs:
     steps:
       - uses: jm-imported-code/checkout@v1
 
-      - uses: ./.github/actions/ecr-build-push
+      - uses: jupitermoney/github-workflows/.github/actions/ecr-build-push@main
         with:
           module: ${{ matrix.module }}
           to-image: ${{ matrix.toImage }}
