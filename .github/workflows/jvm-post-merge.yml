@@ -1,0 +1,123 @@
+name: Universal ECR Publisher
+
+on:
+  workflow_call:
+
+    # ─────────────────────────────
+    # INPUTS – FULLY CONFIGURABLE
+    # ─────────────────────────────
+    inputs:
+
+      ecr_registry:
+        type: string
+        # staging account
+        default: "454518750364.dkr.ecr.ap-south-1.amazonaws.com"
+
+      java_version:
+        type: string
+        default: "21"
+        required: true
+
+      # ───── Tagging ─────
+      tag_prefix:
+        type: string
+        default: "rc" # auto-overridden to "hotfix" for hotfix-* branches, "pr" for pull requests
+
+# ─────────────────────────────────────────
+# GLOBAL ENV
+# ─────────────────────────────────────────
+env:
+  ECR_REGISTRY: ${{ inputs.ecr_registry }}
+
+  # Security / Trivy
+  APPROVAL_SERVICE_URL: "https://trivy.audit.jupiter.money"
+  APPROVAL_SERVICE_TOKEN: ${{ secrets.APPROVAL_SERVICE_TOKEN }}
+
+  # Git Context
+  CI_COMMIT_SHA: ${{ github.sha }}
+  GITHUB_USER: ${{ secrets.CI_GITHUB_USER }}
+  GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+
+  # Artifactory
+  ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+  ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+
+  SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+  GITHUB_EVENT: ${{ toJson(github.event) }}
+  IS_STANDARD_POST_COMMIT_WORKFLOW: true
+  REPO_METADATA_TOKEN: ${{ secrets.CI_GITHUB_TOKEN_METADATA_REPO }}
+
+# ─────────────────────────────────────────
+# JOBS
+# ─────────────────────────────────────────
+
+jobs:
+
+  # ─────────────────────────────────────────────────────────────────
+  # STEP 1 — Resolve metadata + test entire codebase once + Sonar
+  #
+  # Single Gradle cold start: generateServiceMetadata and test run
+  # in one invocation. Cache is saved here so matrix jobs downstream
+  # restore it and skip all dependency downloads.
+  # ─────────────────────────────────────────────────────────────────
+
+  test:
+    runs-on: ubuntu-latest
+
+    outputs:
+      matrix: ${{ steps.metadata.outputs.matrix }}
+      sonar_enabled: ${{ steps.metadata.outputs.sonar_enabled }}
+
+    steps:
+      - uses: ./.github/actions/gradle-setup
+        with:
+          java-version: ${{ inputs.java_version }}
+          fetch-depth: 0  # required for Sonar blame analysis
+
+      - name: Generate Service Metadata
+        id: metadata
+        uses: ./.github/actions/generate-metadata
+
+      # Skipped on pull_request events — PR validation is handled by jvm-app-pr-check.yml.
+      - name: Run Tests
+        if: github.event_name == 'push'
+        run: ./gradlew test
+
+      # Runs in the same job so JaCoCo reports from the test step above are
+      # already on disk — no need to re-run tests.
+      - name: Run Sonar Analysis
+        if: github.event_name == 'push' && steps.metadata.outputs.sonar_enabled == 'true'
+        run: |
+          echo "skipping sonar"
+          # ./gradlew sonar
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ─────────────────────────────────────────────────────────────────
+  # STEP 2 — Build and push per module (matrix)
+  #
+  # Gradle cache restored from STEP 1 — no dependency downloads.
+  # Only jibDockerBuild runs per module; tests are already done.
+  # ─────────────────────────────────────────────────────────────────
+
+  build-push:
+    needs: test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix: ${{ fromJSON(needs.test.outputs.matrix) }}
+
+    steps:
+      - uses: jm-imported-code/checkout@v1
+
+      - uses: ./.github/actions/ecr-build-push
+        with:
+          module: ${{ matrix.module }}
+          to-image: ${{ matrix.toImage }}
+          tag-prefix: "rc"
+          ecr-registry: ${{ inputs.ecr_registry }}
+          java-version: ${{ inputs.java_version }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
+          approval-service-url: ${{ env.APPROVAL_SERVICE_URL }}
+          approval-service-token: ${{ secrets.APPROVAL_SERVICE_TOKEN }}
