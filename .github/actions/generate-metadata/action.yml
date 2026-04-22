@@ -1,0 +1,44 @@
+name: Generate Service Metadata
+description: Run generateServiceMetadata and parse jib modules matrix and Sonar config
+
+outputs:
+  matrix:
+    description: JSON matrix of {module, toImage} for each jib module
+    value: ${{ steps.parse.outputs.matrix }}
+  sonar_enabled:
+    description: Whether Sonar analysis is enabled ("true" / "false")
+    value: ${{ steps.parse.outputs.sonar_enabled }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate Service Metadata
+      shell: bash
+      run: ./gradlew generateServiceMetadata
+
+    - name: Parse Service Metadata
+      id: parse
+      shell: bash
+      run: |
+        METADATA_FILE="build/metadata/service-metadata.json"
+
+        if [[ ! -f "$METADATA_FILE" ]]; then
+          echo "❌ $METADATA_FILE not found. Ensure generateServiceMetadata ran successfully."
+          exit 1
+        fi
+
+        MODULE_COUNT=$(jq '.jibModules | length' "$METADATA_FILE")
+        if [[ "$MODULE_COUNT" -eq 0 ]]; then
+          echo "❌ jibModules array is empty. Nothing to build."
+          exit 1
+        fi
+
+        MATRIX=$(jq -c '{include: [.jibModules[] | {module: .module, toImage: .toImage}]}' "$METADATA_FILE")
+        echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+        SONAR_ENABLED=$(jq -r '.sonar.enabled // false' "$METADATA_FILE")
+        echo "sonar_enabled=$SONAR_ENABLED" >> $GITHUB_OUTPUT
+
+        echo "Found $MODULE_COUNT jib module(s):"
+        echo "$MATRIX" | jq -r '.include[] | "  - \(.module)"'
+        echo "Sonar enabled: $SONAR_ENABLED"

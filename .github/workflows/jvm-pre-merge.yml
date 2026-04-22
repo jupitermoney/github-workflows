@@ -1,0 +1,112 @@
+name: JVM App PR Check
+
+on:
+  workflow_call:
+
+    inputs:
+
+      java_version:
+        type: string
+        default: "21"
+        required: true
+
+      # ───── Optional ECR publish ─────
+      publish:
+        type: boolean
+        default: false
+
+      ecr_registry: # staging account
+        type: string
+        default: "454518750364.dkr.ecr.ap-south-1.amazonaws.com" # only used when publish: true
+
+# ─────────────────────────────────────────
+# GLOBAL ENV
+# ─────────────────────────────────────────
+env:
+  CI_COMMIT_SHA: ${{ github.sha }}
+  GITHUB_USER: ${{ secrets.CI_GITHUB_USER }}
+  GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+  GITHUB_EVENT: ${{ toJson(github.event) }}
+  ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+  ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+  SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+  REPO_METADATA_TOKEN: ${{ secrets.CI_GITHUB_TOKEN_METADATA_REPO }}
+  IS_STANDARD_PR_CHECK_WORKFLOW: true
+
+# ─────────────────────────────────────────
+# JOBS
+# ─────────────────────────────────────────
+
+jobs:
+
+  build-test:
+    runs-on: ubuntu-latest
+
+    outputs:
+      matrix: ${{ steps.metadata.outputs.matrix }}
+      sonar_enabled: ${{ steps.metadata.outputs.sonar_enabled }}
+
+    steps:
+      - uses: ./.github/actions/gradle-setup
+        with:
+          java-version: ${{ inputs.java_version }}
+          fetch-depth: 0  # required for Sonar blame analysis and new-code detection
+
+      # ─────────────── METADATA ───────────────
+
+      - name: Generate Service Metadata
+        id: metadata
+        uses: ./.github/actions/generate-metadata
+
+      # ─────────────── BUILD ───────────────
+
+      - name: Build
+        run: ./gradlew build -x test
+
+      # ─────────────── TEST ───────────────
+
+      - name: Test
+        run: ./gradlew test
+
+      # ─────────────── SONAR (if enabled) ───────────────
+
+      - name: Run Sonar Analysis
+        run: |
+          if [[ "${{ steps.metadata.outputs.sonar_enabled }}" == "true" ]]; then
+            echo "Sonar enabled — running analysis..."
+            ./gradlew sonar
+          else
+            echo "Sonar disabled in project config, skipping."
+          fi
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ─────────────────────────────────────────────────────────────────
+  # OPTIONAL — Build and push per module (matrix)
+  #
+  # Only runs when publish: true is passed by the caller.
+  # Useful for deploying PR builds to staging environments.
+  # ─────────────────────────────────────────────────────────────────
+
+  build-push:
+    needs: build-test
+    if: inputs.publish == true
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix: ${{ fromJSON(needs.build-test.outputs.matrix) }}
+
+    steps:
+      - uses: jm-imported-code/checkout@v1
+
+      - uses: ./.github/actions/ecr-build-push
+        with:
+          module: ${{ matrix.module }}
+          to-image: ${{ matrix.toImage }}
+          tag-prefix: "pr"
+          ecr-registry: ${{ inputs.ecr_registry }}
+          java-version: ${{ inputs.java_version }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
+          approval-service-url: "https://trivy.audit.jupiter.money"
+          approval-service-token: ${{ secrets.APPROVAL_SERVICE_TOKEN }}

@@ -1,0 +1,29 @@
+name: Gradle Setup
+description: Checkout, setup Java, and restore Gradle dependency cache
+
+inputs:
+  java-version:
+    description: Java version to use
+    required: true
+  fetch-depth:
+    description: Number of commits to fetch (0 = all history, required for Sonar blame)
+    default: "1"
+
+runs:
+  using: composite
+  steps:
+    - uses: jm-imported-code/checkout@v1
+      with:
+        fetch-depth: ${{ inputs.fetch-depth }}
+
+    - uses: jm-imported-code/setup-java@v1
+      with:
+        java-version: ${{ inputs.java-version }}
+
+    - uses: jm-imported-code/cache@v3
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/gradle-wrapper.properties') }}
+        restore-keys: gradle-${{ runner.os }}-
