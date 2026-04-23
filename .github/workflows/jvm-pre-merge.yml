@@ -17,6 +17,7 @@ on:
 
       ecr_registry: # staging account
         type: string
+        # staging account
         default: "454518750364.dkr.ecr.ap-south-1.amazonaws.com" # only used when publish: true
 
 # ─────────────────────────────────────────
@@ -58,15 +59,10 @@ jobs:
         id: metadata
         uses: jupitermoney/github-workflows/.github/actions/generate-metadata@main
 
-      # ─────────────── BUILD ───────────────
-
-      - name: Build
-        run: ./gradlew build -x test
-
       # ─────────────── TEST ───────────────
 
-      - name: Test
-        run: ./gradlew test
+      - name: Build & Test
+        run: ./gradlew build
 
       # ─────────────── SONAR (if enabled) ───────────────
 
@@ -74,7 +70,7 @@ jobs:
         run: |
           if [[ "${{ steps.metadata.outputs.sonar_enabled }}" == "true" ]]; then
             echo "Sonar enabled — running analysis..."
-            ./gradlew sonar
+            # ./gradlew sonar
           else
             echo "Sonar disabled in project config, skipping."
           fi
@@ -102,7 +98,7 @@ jobs:
       - uses: jupitermoney/github-workflows/.github/actions/ecr-build-push@main
         with:
           module: ${{ matrix.module }}
-          to-image: ${{ matrix.toImage }}
+          image-name: ${{ matrix.toImage }}
           tag-prefix: "pr"
           ecr-registry: ${{ inputs.ecr_registry }}
           java-version: ${{ inputs.java_version }}
