@@ -5,7 +5,7 @@ inputs:
   module:
     description: Gradle module path (e.g. :services:lms:server)
     required: true
-  to-image:
+  image-name:
     description: Docker image name (e.g. lms)
     required: true
   tag-prefix:
@@ -81,20 +81,20 @@ runs:
       shell: bash
       run: |
         docker tag \
-          "${{ inputs.to-image }}:latest" \
-          "${{ inputs.ecr-registry }}/${{ inputs.to-image }}:$DOCKER_IMAGE_TAG"
+          "${{ inputs.image-name }}:latest" \
+          "${{ inputs.ecr-registry }}/${{ inputs.image-name }}:$DOCKER_IMAGE_TAG"
 
     - name: Run Trivy Scan
       uses: jupitermoney/security-automations@main
       with:
         tool: trivy
-        image-name: "${{ inputs.ecr-registry }}/${{ inputs.to-image }}:${{ env.DOCKER_IMAGE_TAG }}"
+        image-name: "${{ inputs.ecr-registry }}/${{ inputs.image-name }}:${{ env.DOCKER_IMAGE_TAG }}"
         approval-service-url: ${{ inputs.approval-service-url }}
         approval-service-token: ${{ inputs.approval-service-token }}
 
     - name: Docker Push
       shell: bash
-      run: docker push "${{ inputs.ecr-registry }}/${{ inputs.to-image }}:$DOCKER_IMAGE_TAG"
+      run: docker push "${{ inputs.ecr-registry }}/${{ inputs.image-name }}:$DOCKER_IMAGE_TAG"
 
     - name: Logout
       if: always()
