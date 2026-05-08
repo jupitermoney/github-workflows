@@ -25,6 +25,17 @@ on:
         default: ""
         required: false
 
+      # ───── Multi-ECR push targets ─────
+      ecr_targets:
+        type: string
+        description: |
+          Optional JSON array of ECR push targets. Each entry must have:
+            { "registry": "<account>.dkr.ecr.<region>.amazonaws.com", "repository": "<name>", "tag_prefix": "rc" }
+          When provided, overrides ecr_registry — each (module × target) becomes one matrix entry.
+          Example: '[{"registry":"454518750364.dkr.ecr.ap-south-1.amazonaws.com","repository":"nexus","tag_prefix":"rc"}]'
+        default: ""
+        required: false
+
 # ─────────────────────────────────────────
 # GLOBAL ENV
 # ─────────────────────────────────────────
@@ -68,6 +79,7 @@ jobs:
 
     outputs:
       matrix: ${{ steps.metadata.outputs.matrix }}
+      build_matrix: ${{ steps.build-matrix.outputs.matrix }}
       sonar_enabled: ${{ steps.metadata.outputs.sonar_enabled }}
 
     steps:
@@ -87,6 +99,28 @@ jobs:
       - name: Generate Service Metadata
         id: metadata
         uses: jupitermoney/github-workflows/.github/actions/generate-metadata@main
+
+      - name: Compute Build-Push Matrix
+        id: build-matrix
+        shell: bash
+        env:
+          MODULES: ${{ steps.metadata.outputs.matrix }}
+          ECR_TARGETS: ${{ inputs.ecr_targets }}
+          ECR_REGISTRY: ${{ inputs.ecr_registry }}
+        run: |
+          if [[ -z "$ECR_TARGETS" || "$ECR_TARGETS" == "[]" ]]; then
+            # Backward-compatible: single registry, one entry per module
+            MATRIX=$(echo "$MODULES" | jq -c \
+              --arg registry "$ECR_REGISTRY" \
+              '{include: [.include[] | . + {ecr_registry: $registry, tag_prefix: "rc"}]}')
+          else
+            # Fan-out: each module × each ecr_target becomes one matrix entry
+            MATRIX=$(jq -cn \
+              --argjson modules "$(echo "$MODULES" | jq '.include')" \
+              --argjson targets "$ECR_TARGETS" \
+              '{include: [$modules[] as $m | $targets[] | {module: $m.module, toImage: .repository, ecr_registry: .registry, tag_prefix: .tag_prefix}]}')
+          fi
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
       # Skipped on pull_request events — PR validation is handled by jvm-app-pr-check.yml.
       - name: Run Tests
@@ -117,7 +151,7 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
-      matrix: ${{ fromJSON(needs.test.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.test.outputs.build_matrix) }}
 
     steps:
       - uses: jm-imported-code/checkout@v1
@@ -126,8 +160,8 @@ jobs:
         with:
           module: ${{ matrix.module }}
           image-name: ${{ matrix.toImage }}
-          tag-prefix: "rc"
-          ecr-registry: ${{ inputs.ecr_registry }}
+          tag-prefix: ${{ matrix.tag_prefix }}
+          ecr-registry: ${{ matrix.ecr_registry }}
           java-version: ${{ inputs.java_version }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}

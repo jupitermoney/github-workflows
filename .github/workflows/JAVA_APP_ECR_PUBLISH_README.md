@@ -151,7 +151,31 @@ Every run automatically exposes:
 
 ## Common Use Cases
 
-### 1. Custom Build Command
+### 1. Push to Multiple ECR Repositories (Multi-Tenant)
+
+Services that need to push the same image to multiple ECR repositories (e.g., one per tenant or team) can use the `ecr_targets` input instead of `ecr_registry`.
+
+```yaml
+jobs:
+  publish:
+    uses: jupitermoney/github-workflows/.github/workflows/jvm-post-merge.yml@main
+    with:
+      java_version: "21"
+      ecr_targets: |
+        [
+          {"registry": "454518750364.dkr.ecr.ap-south-1.amazonaws.com", "repository": "nexus",                "tag_prefix": "rc"},
+          {"registry": "454518750364.dkr.ecr.ap-south-1.amazonaws.com", "repository": "ds-jm-nexus-service", "tag_prefix": "master"},
+          {"registry": "454518750364.dkr.ecr.ap-south-1.amazonaws.com", "repository": "cstech-nexus",        "tag_prefix": "rc"},
+          {"registry": "454518750364.dkr.ecr.ap-south-1.amazonaws.com", "repository": "investment-nexus",    "tag_prefix": "rc"}
+        ]
+    secrets: inherit
+```
+
+Each entry in `ecr_targets` produces one build-push job. The image is built once per module, then each target gets its own tag (using the entry's `tag_prefix`) and push. Targets can span different AWS accounts by specifying different `registry` values.
+
+When `ecr_targets` is omitted, behaviour is unchanged — the single `ecr_registry` input is used with a `rc` tag prefix.
+
+### 2. Custom Build Command
 
 ```yaml
 with:

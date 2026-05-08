@@ -68,10 +68,14 @@ runs:
         aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
         aws-region: ap-south-1
 
+    - name: Extract AWS Account ID
+      shell: bash
+      run: echo "AWS_ACCOUNT_ID=$(echo '${{ inputs.ecr-registry }}' | cut -d'.' -f1)" >> $GITHUB_ENV
+
     - name: Login to AWS ECR
       uses: jm-imported-code/amazon-ecr-login@v1.0.1
       with:
-        registries: 454518750364
+        registries: ${{ env.AWS_ACCOUNT_ID }}
 
     - name: Build Module
       shell: bash
