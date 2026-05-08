@@ -71,18 +71,18 @@ jobs:
       sonar_enabled: ${{ steps.metadata.outputs.sonar_enabled }}
 
     steps:
-      - uses: jupitermoney/github-workflows/.github/actions/gradle-setup@main
-        with:
-          java-version: ${{ inputs.java_version }}
-          fetch-depth: 1  # required for Sonar blame analysis
-
-      # ─────────────── SERVICES ───────────────
+            # ─────────────── SERVICES ───────────────
 
       - name: Setup Services
         if: inputs.services != ''
         uses: jupitermoney/github-workflows/.github/actions/setup-services@main
         with:
           services: ${{ inputs.services }}
+
+      - uses: jupitermoney/github-workflows/.github/actions/gradle-setup@main
+        with:
+          java-version: ${{ inputs.java_version }}
+          fetch-depth: 1  # required for Sonar blame analysis
 
       - name: Generate Service Metadata
         id: metadata
