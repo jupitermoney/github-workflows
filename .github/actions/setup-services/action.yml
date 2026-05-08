@@ -1,0 +1,49 @@
+name: Setup Services
+description: Start Docker services based on comma-separated list of service names
+
+inputs:
+  services:
+    description: Comma-separated list of services to start (e.g., postgres,minio)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Start Services
+      shell: bash
+      run: |
+        IFS=',' read -ra SERVICE_LIST <<< "${{ inputs.services }}"
+        TRIM_SCRIPT='s/^[[:space:]]*//;s/[[:space:]]*$//'
+
+        for service in "${SERVICE_LIST[@]}"; do
+          service=$(echo "$service" | sed -e "$TRIM_SCRIPT")
+
+          case "$service" in
+            postgres)
+              echo "Starting PostgreSQL..."
+              docker run -d --name postgres -p 5432:5432 \
+                -e POSTGRES_USER=postgres \
+                -e POSTGRES_PASSWORD=postgres \
+                -e POSTGRES_DB=postgres \
+                postgres:17-alpine
+              echo "DB_HOST=localhost" >> $GITHUB_ENV
+              echo "DB_PORT=5432" >> $GITHUB_ENV
+              echo "DB_USER=postgres" >> $GITHUB_ENV
+              echo "DB_PASSWORD=postgres" >> $GITHUB_ENV
+              echo "DB_NAME=postgres" >> $GITHUB_ENV
+              ;;
+            minio)
+              echo "Starting MinIO..."
+              docker run -d --name minio -p 9000:9000 \
+                -e MINIO_ROOT_USER=minio \
+                -e MINIO_ROOT_PASSWORD=minio123 \
+                minio/minio:latest server /data
+              echo "MINIO_ENDPOINT=http://localhost:9000" >> $GITHUB_ENV
+              echo "MINIO_ACCESS_KEY=minio" >> $GITHUB_ENV
+              echo "MINIO_SECRET_KEY=minio123" >> $GITHUB_ENV
+              ;;
+            *)
+              echo "Unknown service: $service - skipping"
+              ;;
+          esac
+        done
