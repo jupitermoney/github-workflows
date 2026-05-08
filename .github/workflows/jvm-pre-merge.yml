@@ -15,6 +15,13 @@ on:
         type: boolean
         default: false
 
+      # ───── Services to start (comma-separated list e.g., postgres,minio) ─────
+      services:
+        type: string
+        description: "Comma-separated list of services to start (e.g., postgres,minio)"
+        default: ""
+        required: false
+
       ecr_registry: # staging account
         type: string
         # staging account
@@ -58,6 +65,14 @@ jobs:
       - name: Generate Service Metadata
         id: metadata
         uses: jupitermoney/github-workflows/.github/actions/generate-metadata@main
+
+      # ─────────────── SERVICES ───────────────
+
+      - name: Setup Services
+        if: inputs.services != ''
+        uses: jupitermoney/github-workflows/.github/actions/setup-services@main
+        with:
+          services: ${{ inputs.services }}
 
       # ─────────────── TEST ───────────────
 

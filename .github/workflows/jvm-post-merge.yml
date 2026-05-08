@@ -18,6 +18,13 @@ on:
         default: "21"
         required: true
 
+      # ───── Services to start (comma-separated list e.g., postgres,minio) ─────
+      services:
+        type: string
+        description: "Comma-separated list of services to start (e.g., postgres,minio)"
+        default: ""
+        required: false
+
 # ─────────────────────────────────────────
 # GLOBAL ENV
 # ─────────────────────────────────────────
@@ -68,6 +75,14 @@ jobs:
         with:
           java-version: ${{ inputs.java_version }}
           fetch-depth: 1  # required for Sonar blame analysis
+
+      # ─────────────── SERVICES ───────────────
+
+      - name: Setup Services
+        if: inputs.services != ''
+        uses: jupitermoney/github-workflows/.github/actions/setup-services@main
+        with:
+          services: ${{ inputs.services }}
 
       - name: Generate Service Metadata
         id: metadata
