@@ -26,6 +26,11 @@ runs:
                 -e POSTGRES_PASSWORD=postgres \
                 -e POSTGRES_DB=postgres \
                 postgres:17-alpine
+              echo "DB_HOST=localhost" >> $GITHUB_ENV
+              echo "DB_PORT=5432" >> $GITHUB_ENV
+              echo "DB_USER=postgres" >> $GITHUB_ENV
+              echo "DB_PASSWORD=postgres" >> $GITHUB_ENV
+              echo "DB_NAME=postgres" >> $GITHUB_ENV
               ;;
             mysql)
               echo "Starting MySQL..."
@@ -35,6 +40,11 @@ runs:
                 -e MYSQL_USER=mysql \
                 -e MYSQL_PASSWORD=mysql \
                 mysql:8.0
+              echo "DB_HOST=localhost" >> $GITHUB_ENV
+              echo "DB_PORT=3306" >> $GITHUB_ENV
+              echo "DB_USER=mysql" >> $GITHUB_ENV
+              echo "DB_PASSWORD=mysql" >> $GITHUB_ENV
+              echo "DB_NAME=mysql" >> $GITHUB_ENV
               ;;
             minio)
               echo "Starting MinIO..."
