@@ -1,273 +1,223 @@
-# Universal ECR Publisher – GitHub Workflows
+# JVM Reusable Workflow Integration Guide
 
-This repository provides **reusable GitHub Actions workflows** for building, scanning, and publishing Docker images to **AWS ECR** in a standardized and secure way.
+This guide explains how to integrate the reusable JVM workflows from `jupitermoney/github-workflows` into a consumer repository.
 
-## Available Templates
+## Workflows to Use
 
-| Template                                | Primary Use Case                                       |
-| --------------------------------------- | ------------------------------------------------------ |
-| **java-app-ecr-publish.yml**            | Build Java/Gradle services with Jib and publish to ECR |
-| (future) node-app-ecr-publish.yml       | Node services                                          |
-| (future) generic-docker-ecr-publish.yml | Raw Dockerfile projects                                |
+| Workflow | When to use it |
+| --- | --- |
+| `jvm-pre-merge.yml` | Validate pull requests, and optionally publish PR images |
+| `jvm-post-merge.yml` | Build and publish images after merge to `master` or `hotfix-*` |
 
----
+## Recommended Consumer Setup
 
-# java-app-ecr-publish.yml
+### PR workflow
 
-### What This Template Does
-
-This workflow is **zero-config for services using the `kotlin-spring-java21` plugin**. It reads project configuration directly from Gradle via `./gradlew generateServiceMetadata`, so there is no need to repeat ECR repository names, Java versions, or API spec paths in the workflow file.
-
-End-to-end pipeline:
-
-1. Checkout code
-2. Setup Java 21
-3. Compute Docker tag
-4. Login to AWS ECR
-5. Run `./gradlew generateServiceMetadata` → `build/metadata/service-metadata.json`
-6. Build all Jib modules (`./gradlew clean build -x test jibDockerBuild`)
-7. Tag each module's image with the computed tag
-8. Run Trivy security scan (primary module)
-9. Push all module images to ECR
-10. Push publishable API specs to API Store (parallel, one job per spec)
-
----
-
-## Quick Start (Consumer Repo)
-
-Create `.github/workflows/publish.yml`:
+Create `.github/workflows/pr-check.yml` in your repository:
 
 ```yaml
-name: Publish Service Image
+name: PR Check
 
 on:
   pull_request:
-    branches: [ main ]
-  push:
-    branches: [ main, hotfix-release** ]
+    branches:
+      - master
+      - hotfix-**
 
 jobs:
-  push:
-    uses: jupitermoney/github-workflows/.github/workflows/java-app-ecr-publish.yml@main
+  check:
+    uses: jupitermoney/github-workflows/.github/workflows/jvm-pre-merge.yml@main
+    with:
+      java_version: "21"
+      publish: true
+      services: "postgres"
     secrets: inherit
 ```
 
-That's it. ECR repo names, Java version, and API spec paths all come from `build.gradle.kts` via the plugin — no `with:` block needed.
+### Post-merge workflow
 
----
+Create `.github/workflows/publish-image.yml` in your repository:
 
-## How Metadata Drives CI
+```yaml
+name: Publish image
 
-The workflow runs `./gradlew generateServiceMetadata` before building. This task (provided by `kotlin-spring-java21`) writes `build/metadata/service-metadata.json` containing:
+on:
+  push:
+    branches:
+      - master
+      - hotfix-**
 
-| Metadata field | Used by CI for |
-|---|---|
-| `jibModules[].toImage` | ECR repository name per module |
-| `jibModules[].javaVersion` | Base image version (informational) |
-| `openApiSpecs[].specFile` where `publishClients == true` | API Store push targets |
+jobs:
+  publish:
+    uses: jupitermoney/github-workflows/.github/workflows/jvm-post-merge.yml@main
+    with:
+      java_version: "21"
+    secrets: inherit
+```
 
-Multi-module projects (e.g., a monorepo with 4 Spring Boot services) are handled automatically — each module gets tagged and pushed in a sequential loop within a single job.
+## How Integration Works
 
----
+Both reusable workflows expect the consumer repository to generate project metadata by running:
+
+```bash
+./gradlew generateServiceMetadata
+```
+
+That task must produce:
+
+```text
+build/metadata/service-metadata.json
+```
+
+The workflows read that file to determine:
+
+- the Jib modules to build
+- the ECR image names for those modules
+- whether Sonar is enabled
+
+## Expected Metadata Shape
+
+At minimum, the metadata should include:
+
+```json
+{
+  "jibModules": [
+    {
+      "module": ":services:sample:server",
+      "toImage": "sample-service"
+    }
+  ],
+  "sonar": {
+    "enabled": true
+  }
+}
+```
+
+If `jibModules` is empty, publish jobs will fail because the build matrix cannot be created.
+
+## Workflow Behavior
+
+### `jvm-pre-merge.yml`
+
+This workflow:
+
+1. optionally starts local dependencies from the `services` input
+2. sets up checkout, Java, and Gradle cache
+3. runs `generateServiceMetadata`
+4. runs `./gradlew build`
+5. optionally builds and pushes PR-tagged images when `publish: true`
+
+Use `publish: true` only if you want PR builds to publish to the staging ECR registry.
+
+### `jvm-post-merge.yml`
+
+This workflow:
+
+1. optionally starts local dependencies from the `services` input
+2. sets up checkout, Java, and Gradle cache
+3. runs `generateServiceMetadata`
+4. runs `./gradlew build` on push events
+5. runs module-wise image build and push using a matrix
+6. runs Trivy scan before each push
 
 ## Inputs
 
-### Build
+### `jvm-pre-merge.yml`
 
-| Input         | Default                                        | Description |
-| ------------- | ---------------------------------------------- | ----------- |
-| build_command | `./gradlew clean build -x test jibDockerBuild` | Full build command |
-| enable_build  | true                                           | Skip build step if false |
+| Input | Default | Required | Notes |
+| --- | --- | --- | --- |
+| `java_version` | `"21"` | Yes | Java runtime used by CI |
+| `publish` | `false` | No | Enables PR image publish |
+| `services` | `""` | No | Comma-separated services, for example `postgres,minio` |
+| `ecr_registry` | `454518750364.dkr.ecr.ap-south-1.amazonaws.com` | No | Used only when `publish: true` |
 
-### Tagging
+### `jvm-post-merge.yml`
 
-| Input          | Default                            | Description |
-| -------------- | ---------------------------------- | ----------- |
-| tag_prefix     | rc                                 | Prefix for computed tag |
-| tag_calculator | script generating DOCKER_IMAGE_TAG | Custom tag strategy (see below) |
+| Input | Default | Required | Notes |
+| --- | --- | --- | --- |
+| `java_version` | `"21"` | Yes | Java runtime used by CI |
+| `services` | `""` | No | Comma-separated services, for example `postgres,minio` |
+| `ecr_registry` | `454518750364.dkr.ecr.ap-south-1.amazonaws.com` | No | Target ECR registry |
 
-### Security
+## Supported Service Containers
 
-| Input                | Default                          | Description |
-| -------------------- | -------------------------------- | ----------- |
-| approval_service_url | https://trivy.audit.jupiter.money | Trivy approval endpoint |
+The optional `services` input currently supports:
 
-### Docker / Push
+- `postgres`
+- `mysql`
+- `minio`
 
-| Input       | Default | Description |
-| ----------- | ------- | ----------- |
-| enable_push | true    | Skip ECR push if false |
-
-### API Store
-
-| Input            | Default | Description |
-| ---------------- | ------- | ----------- |
-| enable_api_store | true    | Set false to skip API Store entirely |
-
-### Hooks
-
-| Input              | Description              |
-| ------------------ | ------------------------ |
-| pre_build_command  | Shell before build       |
-| post_build_command | Shell after build        |
-| extra_env          | Additional env variables |
-
-### Infrastructure
-
-| Input      | Default    | Description |
-| ---------- | ---------- | ----------- |
-| aws_region | ap-south-1 | AWS region  |
-
----
-
-## Secrets Contract (Optional but recommended)
-
-* `AWS_ACCESS_KEY_ID`
-* `AWS_ACCESS_KEY_SECRET`
-* `APPROVAL_SERVICE_TOKEN`
-* `CI_GITHUB_USER`
-* `CI_GITHUB_TOKEN`
-* `ARTIFACTORY_USER`
-* `ARTIFACTORY_PASSWORD`
-* `API_STORE_CLIENT_ID`
-* `API_STORE_CLIENT_SECRET`
-
----
-
-## Environment Variables Available by Default
-
-Every run automatically exposes:
-
-* `ECR_REGISTRY`
-* `APPROVAL_SERVICE_URL`
-* `APPROVAL_SERVICE_TOKEN`
-* `CI_COMMIT_SHA`
-* `GITHUB_USER`
-* `GITHUB_TOKEN`
-* `ARTIFACTORY_USER`
-* `ARTIFACTORY_PASSWORD`
-
----
-
-## Common Use Cases
-
-### 1. Custom Build Command
+Examples:
 
 ```yaml
 with:
-  build_command: "./gradlew clean bootJar jibDockerBuild"
+  services: "postgres"
 ```
-
-### 2. Custom Tag Strategy
 
 ```yaml
 with:
-  tag_calculator: |
-    if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-      TAG="pr-${GITHUB_SHA:0:8}"
-    else
-      TAG="main-${GITHUB_SHA:0:8}"
-    fi
-    echo "DOCKER_IMAGE_TAG=$TAG" >> $GITHUB_ENV
+  services: "postgres,minio"
 ```
 
-### 3. Pass Extra Env
+## Secrets Contract
 
-```yaml
-with:
-  extra_env: |
-    FEATURE_FLAG=true
-    LOG_LEVEL=debug
-```
+Use `secrets: inherit` in the calling workflow and make sure the consumer repository or org provides:
 
-### 4. Skip API Store
+- `CI_GITHUB_USER`
+- `CI_GITHUB_TOKEN`
+- `CI_GITHUB_TOKEN_METADATA_REPO`
+- `ARTIFACTORY_USER`
+- `ARTIFACTORY_PASSWORD`
+- `SONARQUBE_TOKEN`
 
-```yaml
-with:
-  enable_api_store: false
-```
+For publish flows, also provide:
 
----
+- `AWS_ACCESS_KEY_ID`
+- `AWS_ACCESS_KEY_SECRET`
+- `APPROVAL_SERVICE_TOKEN`
 
-## Expected Image Tags
+## Image Tag Format
 
-Default format:
+The ECR build/push action computes tags automatically:
 
-```
-rc-<short-sha>
-```
+- pull request builds use `pr-<short-sha>`
+- pushes to `hotfix-*` use `hotfix-<short-sha>`
+- other pushes use `rc-<short-sha>`
 
-Example:
+Examples:
 
-```
-rc-a1b2c3d4
-```
-
----
-
-## Plugin Requirement
-
-Your service must use the `kotlin-spring-java21` Gradle plugin (v0.3.4+). The plugin provides the `generateServiceMetadata` task that produces `build/metadata/service-metadata.json`.
-
-Your `build.gradle.kts` doesn't change — the metadata is collected automatically from config you've already written.
-
----
-
-## Migrating Existing Services
-
-1. Bump plugin to `0.3.4+` in `settings.gradle.kts`
-2. Remove the `with:` block from your workflow call (or strip `ecr_repository`, `java_version`, `api_spec_path` from it)
-3. Done — CI reads everything from Gradle config on next push
-
----
-
-## Known Limitations (POC)
-
-**Trivy multi-image scanning**: Trivy currently runs only on the first jib module (primary image). For monorepos with multiple modules, secondary images are pushed without individual Trivy scans. Full multi-image support requires updating `jupitermoney/security-automations` to accept an image array, or restructuring into a matrix job.
-
----
+- `pr-a1b2c3d4`
+- `hotfix-a1b2c3d4`
+- `rc-a1b2c3d4`
 
 ## Troubleshooting
 
-### ❌ build/metadata/service-metadata.json not found
+### `build/metadata/service-metadata.json not found`
 
-The `generateServiceMetadata` Gradle task failed. Check that:
-* The `kotlin-spring-java21` plugin is applied
-* `./gradlew generateServiceMetadata` succeeds locally
+`generateServiceMetadata` did not produce the expected file. Verify that:
 
-### ❌ jibModules array is empty
+- `./gradlew generateServiceMetadata` succeeds locally
+- the metadata file is written to `build/metadata/service-metadata.json`
 
-No Jib modules are configured in `build.gradle.kts`. Add at least one module using `kotlinSpringJib { }`.
+### `jibModules array is empty`
 
-### ❌ Tag calculator must export DOCKER_IMAGE_TAG
+The workflow could not find publishable modules. Verify that your Gradle metadata includes at least one `jibModules` entry.
 
-Your custom script must end with:
+### PR publish job fails on AWS or Trivy steps
 
-```bash
-echo "DOCKER_IMAGE_TAG=value" >> $GITHUB_ENV
-```
+Check that these secrets are available to the consumer repo:
 
-### ❌ Artifactory Auth Failures
+- `AWS_ACCESS_KEY_ID`
+- `AWS_ACCESS_KEY_SECRET`
+- `APPROVAL_SERVICE_TOKEN`
 
-Ensure secrets exist in repo:
+## Summary
 
-* ARTIFACTORY_USER
-* ARTIFACTORY_PASSWORD
+To integrate this template in your repository:
 
-### ❌ Trivy Blocked
+1. add a PR workflow that calls `jvm-pre-merge.yml`
+2. add a push workflow that calls `jvm-post-merge.yml`
+3. ensure `generateServiceMetadata` produces valid metadata
+4. inherit the required secrets
 
-Add approval token:
-
-* APPROVAL_SERVICE_TOKEN
-
----
-
-## Ownership
-
-Platform Engineering – CI/CD
-
-For changes contact:
-#team-platform
-[ci-cd@jupiter.money](mailto:ci-cd@jupiter.money)
-
----
+Once those are in place, the shared workflows will handle testing, matrix generation, image tagging, scanning, and ECR publish centrally.
