@@ -121,6 +121,11 @@ jobs:
 
     steps:
       - uses: jm-imported-code/checkout@v1
+      - name: Setup Services
+        if: inputs.services != ''
+        uses: jupitermoney/github-workflows/.github/actions/setup-services@main
+        with:
+          services: ${{ inputs.services }}
 
       - uses: jupitermoney/github-workflows/.github/actions/ecr-build-push@main
         with:
