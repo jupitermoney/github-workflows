@@ -39,7 +39,8 @@ runs:
                 -e MYSQL_DATABASE=app \
                 -e MYSQL_USER=app \
                 -e MYSQL_PASSWORD=mysql \
-                mysql:8.0
+                mysql:8.0 \
+                --log-bin-trust-function-creators=1
               echo "DB_HOST=localhost" >> $GITHUB_ENV
               echo "DB_PORT=3306" >> $GITHUB_ENV
               echo "DB_USER=app" >> $GITHUB_ENV
