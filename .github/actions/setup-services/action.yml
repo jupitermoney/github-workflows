@@ -24,12 +24,14 @@ runs:
           case "$service" in
             postgres)
               echo "Starting PostgreSQL..."
-              POSTGRES_DB={{inputs.dbSChema}} || "postgres"
+              POSTGRES_DB="${{ inputs.dbSchema }}"
+              POSTGRES_DB="${POSTGRES_DB:-postgres}"
               docker run -d --name postgres -p 5432:5432 \
                 -e POSTGRES_USER=postgres \
                 -e POSTGRES_PASSWORD=postgres \
-                -e POSTGRES_DB=$POSTGRES_DB \
+                -e POSTGRES_DB="$POSTGRES_DB" \
                 postgres:17-alpine
+              until docker exec postgres pg_isready -U postgres; do sleep 1; done
               echo "DB_HOST=localhost" >> $GITHUB_ENV
               echo "DB_PORT=5432" >> $GITHUB_ENV
               echo "DB_USER=postgres" >> $GITHUB_ENV
@@ -38,17 +40,17 @@ runs:
               ;;
             mysql)
               echo "Starting MySQL..."
-              MYQSL_DB={{inputs.dbSChema}} || "mysql"
+              MYSQL_DB="${{ inputs.dbSchema }}"
+              MYSQL_DB="${MYSQL_DB:-mysql}"
               docker run -d --name mysql -p 3306:3306 \
                 -e MYSQL_ROOT_PASSWORD=mysql \
-                -e MYSQL_DATABASE=$MYSQL_DB \
-                -e MYSQL_USER=mysql \
-                -e MYSQL_PASSWORD=mysql \
+                -e MYSQL_DATABASE="$MYSQL_DB" \
                 mysql:8.0 \
                 --log-bin-trust-function-creators=1
+              until docker exec mysql mysqladmin ping -u root -pmysql --silent; do sleep 1; done
               echo "DB_HOST=localhost" >> $GITHUB_ENV
               echo "DB_PORT=3306" >> $GITHUB_ENV
-              echo "DB_USER=mysql" >> $GITHUB_ENV
+              echo "DB_USER=root" >> $GITHUB_ENV
               echo "DB_PASSWORD=mysql" >> $GITHUB_ENV
               echo "DB_NAME=$MYSQL_DB" >> $GITHUB_ENV
               ;;
