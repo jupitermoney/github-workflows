@@ -24,6 +24,10 @@ on:
         description: "Comma-separated list of services to start (e.g., postgres,minio)"
         default: ""
         required: false
+      dbSchema:
+        type: string
+        description: The DB schema for create while running the DB
+        required: false
 
 # ─────────────────────────────────────────
 # GLOBAL ENV
@@ -78,6 +82,7 @@ jobs:
         uses: jupitermoney/github-workflows/.github/actions/setup-services@main
         with:
           services: ${{ inputs.services }}
+          dbSchema: ${{ inputs.dbSchema }}
 
       - uses: jupitermoney/github-workflows/.github/actions/gradle-setup@main
         with:
