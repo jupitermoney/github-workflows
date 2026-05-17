@@ -27,6 +27,11 @@ on:
         # staging account
         default: "454518750364.dkr.ecr.ap-south-1.amazonaws.com" # only used when publish: true
 
+      dbSchema:
+        type: string
+        description: The DB schema to create while running the DB
+        required: false
+
 # ─────────────────────────────────────────
 # GLOBAL ENV
 # ─────────────────────────────────────────
@@ -62,6 +67,7 @@ jobs:
         uses: jupitermoney/github-workflows/.github/actions/setup-services@main
         with:
           services: ${{ inputs.services }}
+          dbSchema: ${{ inputs.dbSchema }}
 
       - uses: jupitermoney/github-workflows/.github/actions/gradle-setup@main
         with:
