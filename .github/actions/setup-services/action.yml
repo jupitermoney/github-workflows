@@ -5,6 +5,9 @@ inputs:
   services:
     description: Comma-separated list of services to start (e.g., postgres,minio)
     required: true
+  dbSchema:
+    description: The DB schema to create while running the DB
+    required: true
 
 runs:
   using: composite
