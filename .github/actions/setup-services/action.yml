@@ -64,6 +64,17 @@ runs:
               echo "MINIO_ACCESS_KEY=minio" >> $GITHUB_ENV
               echo "MINIO_SECRET_KEY=minio123" >> $GITHUB_ENV
               ;;
+            redis)
+              echo "Starting Redis..."
+
+              docker run -d --name redis -p 6379:6379 \
+                redis:7-alpine
+
+              until docker exec redis redis-cli ping | grep PONG; do sleep 1; done
+
+              echo "REDIS_HOST=localhost" >> $GITHUB_ENV
+              echo "REDIS_PORT=6379" >> $GITHUB_ENV
+              ;;
             *)
               echo "Unknown service: $service - skipping"
               ;;
