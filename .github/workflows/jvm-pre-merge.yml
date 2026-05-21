@@ -32,13 +32,18 @@ on:
         description: The DB schema to create while running the DB
         required: false
 
+      # ───── Lambda / S3 deploy mode ─────
+      s3_deploy:
+        type: boolean
+        default: false
+        description: "Set true for Lambda services — skips generate-metadata and ECR publish"
+
 # ─────────────────────────────────────────
 # GLOBAL ENV
 # ─────────────────────────────────────────
 env:
   CI_COMMIT_SHA: ${{ github.sha }}
   GITHUB_USER: ${{ secrets.CI_GITHUB_USER }}
-  GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
   GITHUB_EVENT: ${{ toJson(github.event) }}
   ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
   ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
@@ -59,6 +64,10 @@ jobs:
       matrix: ${{ steps.metadata.outputs.matrix }}
       sonar_enabled: ${{ steps.metadata.outputs.sonar_enabled }}
 
+    env:
+      # GITHUB_TOKEN is a reserved variable and cannot be set at workflow level — must be job-level.
+      GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+
     steps:
       # ─────────────── SERVICES ───────────────
 
@@ -78,6 +87,7 @@ jobs:
 
       - name: Generate Service Metadata
         id: metadata
+        if: inputs.s3_deploy == false
         uses: jupitermoney/github-workflows/.github/actions/generate-metadata@main
 
       # ─────────────── TEST ───────────────
@@ -88,6 +98,7 @@ jobs:
       # ─────────────── SONAR (if enabled) ───────────────
 
       - name: Run Sonar Analysis
+        if: inputs.s3_deploy == false
         run: |
           if [[ "${{ steps.metadata.outputs.sonar_enabled }}" == "true" ]]; then
             echo "Sonar enabled — running analysis..."
@@ -107,11 +118,14 @@ jobs:
 
   build-push:
     needs: build-test
-    if: inputs.publish == true
+    if: inputs.publish == true && inputs.s3_deploy == false
     runs-on: ubuntu-latest
 
     strategy:
       matrix: ${{ fromJSON(needs.build-test.outputs.matrix) }}
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
 
     steps:
       - uses: jm-imported-code/checkout@v1

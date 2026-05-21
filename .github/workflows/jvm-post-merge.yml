@@ -29,6 +29,17 @@ on:
         description: The DB schema for create while running the DB
         required: false
 
+      # ───── Lambda / S3 deploy mode ─────
+      s3_deploy:
+        type: boolean
+        default: false
+        description: "Set true for Lambda services — skips generate-metadata and ECR push"
+
+      s3_bucket:
+        type: string
+        default: ""
+        description: "S3 bucket for Lambda artifact upload (required when s3_deploy: true)"
+
 # ─────────────────────────────────────────
 # GLOBAL ENV
 # ─────────────────────────────────────────
@@ -42,7 +53,6 @@ env:
   # Git Context
   CI_COMMIT_SHA: ${{ github.sha }}
   GITHUB_USER: ${{ secrets.CI_GITHUB_USER }}
-  GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
 
   # Artifactory
   ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
@@ -74,6 +84,9 @@ jobs:
       matrix: ${{ steps.metadata.outputs.matrix }}
       sonar_enabled: ${{ steps.metadata.outputs.sonar_enabled }}
 
+    env:
+      GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+
     steps:
             # ─────────────── SERVICES ───────────────
 
@@ -91,6 +104,7 @@ jobs:
 
       - name: Generate Service Metadata
         id: metadata
+        if: inputs.s3_deploy == false
         uses: jupitermoney/github-workflows/.github/actions/generate-metadata@main
 
       # Skipped on pull_request events — PR validation is handled by jvm-app-pr-check.yml.
@@ -119,10 +133,14 @@ jobs:
 
   build-push:
     needs: test
+    if: inputs.s3_deploy == false
     runs-on: ubuntu-latest
 
     strategy:
       matrix: ${{ fromJSON(needs.test.outputs.matrix) }}
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
 
     steps:
       - uses: jm-imported-code/checkout@v1
@@ -144,3 +162,42 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
           approval-service-url: ${{ env.APPROVAL_SERVICE_URL }}
           approval-service-token: ${{ secrets.APPROVAL_SERVICE_TOKEN }}
+
+  # ─────────────────────────────────────────────────────────────────
+  # OPTIONAL — S3 deploy for Lambda services
+  #
+  # Only runs when s3_deploy: true is passed by the caller.
+  # Builds the deployable JAR via ./devops/build.sh and uploads to S3.
+  # ─────────────────────────────────────────────────────────────────
+
+  s3-deploy:
+    needs: test
+    if: inputs.s3_deploy == true
+    runs-on: ubuntu-latest
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+      AWS_S3_BUCKET: ${{ inputs.s3_bucket }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
+
+    steps:
+      - uses: jupitermoney/github-workflows/.github/actions/gradle-setup@main
+        with:
+          java-version: ${{ inputs.java_version }}
+
+      - name: Configure AWS credentials
+        uses: jm-imported-code/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
+          aws-region: ap-south-1
+
+      - name: Set commit short sha
+        run: echo "CI_COMMIT_SHA=$(git rev-parse --short ${{ github.sha }})" >> $GITHUB_ENV
+
+      - name: Build JAR
+        run: ./devops/build.sh
+
+      - name: Upload JAR to S3
+        run: ./devops/s3_push.sh
