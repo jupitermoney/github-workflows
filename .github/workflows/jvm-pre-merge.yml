@@ -79,12 +79,18 @@ jobs:
       sonar_enabled: ${{ steps.metadata.outputs.sonar_enabled }}
 
     steps:
-      - name: JVM Setup
-        uses: jupitermoney/github-workflows/.github/actions/jvm-setup@main
+      # ─────────────── SERVICES ───────────────
+
+      - name: Setup Services
+        if: inputs.services != ''
+        uses: jupitermoney/github-workflows/.github/actions/setup-services@main
         with:
-          java-version: ${{ inputs.java_version }}
           services: ${{ inputs.services }}
           dbSchema: ${{ inputs.dbSchema }}
+
+      - uses: jupitermoney/github-workflows/.github/actions/gradle-setup@main
+        with:
+          java-version: ${{ inputs.java_version }}
           fetch-depth: 0  # required for Sonar blame analysis and new-code detection
 
       # ─────────────── METADATA ───────────────
@@ -114,6 +120,9 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────
   # OPTIONAL — S3 deploy for Lambda services
+  #
+  # Only runs when s3_deploy: true is passed by the caller.
+  # Builds the deployable JAR via ./devops/build.sh and uploads to S3.
   # ─────────────────────────────────────────────────────────────────
 
   s3-deploy:
@@ -129,8 +138,6 @@ jobs:
       - uses: jupitermoney/github-workflows/.github/actions/s3-deploy@main
         with:
           java-version: ${{ inputs.java_version }}
-          services: ${{ inputs.services }}
-          dbSchema: ${{ inputs.dbSchema }}
           app-module: ${{ matrix.lambda.module }}
           s3-bucket: ${{ inputs.s3_bucket }}
           s3-prefix: ${{ matrix.lambda.s3_prefix }}
@@ -139,6 +146,9 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────
   # OPTIONAL — Build and push per module (matrix)
+  #
+  # Only runs when publish: true is passed by the caller.
+  # Useful for deploying PR builds to staging environments.
   # ─────────────────────────────────────────────────────────────────
 
   build-push:
@@ -150,6 +160,14 @@ jobs:
       matrix: ${{ fromJSON(needs.build-test.outputs.matrix) }}
 
     steps:
+      - uses: jm-imported-code/checkout@v1
+      - name: Setup Services
+        if: inputs.services != ''
+        uses: jupitermoney/github-workflows/.github/actions/setup-services@main
+        with:
+          services: ${{ inputs.services }}
+          dbSchema: ${{ inputs.dbSchema }}
+
       - uses: jupitermoney/github-workflows/.github/actions/ecr-build-push@main
         with:
           module: ${{ matrix.module }}
@@ -157,8 +175,6 @@ jobs:
           tag-prefix: "pr"
           ecr-registry: ${{ inputs.ecr_registry }}
           java-version: ${{ inputs.java_version }}
-          services: ${{ inputs.services }}
-          dbSchema: ${{ inputs.dbSchema }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
           approval-service-url: "https://trivy.audit.jupiter.money"

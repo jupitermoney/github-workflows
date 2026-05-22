@@ -80,6 +80,10 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────
   # STEP 1 — Resolve metadata + test entire codebase once + Sonar
+  #
+  # Single Gradle cold start: generateServiceMetadata and test run
+  # in one invocation. Cache is saved here so matrix jobs downstream
+  # restore it and skip all dependency downloads.
   # ─────────────────────────────────────────────────────────────────
 
   test:
@@ -90,12 +94,18 @@ jobs:
       sonar_enabled: ${{ steps.metadata.outputs.sonar_enabled }}
 
     steps:
-      - name: JVM Setup
-        uses: jupitermoney/github-workflows/.github/actions/jvm-setup@main
+            # ─────────────── SERVICES ───────────────
+
+      - name: Setup Services
+        if: inputs.services != ''
+        uses: jupitermoney/github-workflows/.github/actions/setup-services@main
         with:
-          java-version: ${{ inputs.java_version }}
           services: ${{ inputs.services }}
           dbSchema: ${{ inputs.dbSchema }}
+
+      - uses: jupitermoney/github-workflows/.github/actions/gradle-setup@main
+        with:
+          java-version: ${{ inputs.java_version }}
           fetch-depth: 1  # required for Sonar blame analysis
 
       - name: Generate Service Metadata
@@ -106,7 +116,9 @@ jobs:
       # Skipped on pull_request events — PR validation is handled by jvm-app-pr-check.yml.
       - name: Run Tests
         if: github.event_name == 'push'
-        run: ./gradlew build
+        run: |
+          echo "Running build and tests"
+          ./gradlew build
 
       # Runs in the same job so JaCoCo reports from the test step above are
       # already on disk — no need to re-run tests.
@@ -120,6 +132,9 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────
   # STEP 2 — Build and push per module (matrix)
+  #
+  # Gradle cache restored from STEP 1 — no dependency downloads.
+  # Only jibDockerBuild runs per module; tests are already done.
   # ─────────────────────────────────────────────────────────────────
 
   build-push:
@@ -131,6 +146,14 @@ jobs:
       matrix: ${{ fromJSON(needs.test.outputs.matrix) }}
 
     steps:
+      - uses: jm-imported-code/checkout@v1
+      - name: Setup Services
+        if: inputs.services != ''
+        uses: jupitermoney/github-workflows/.github/actions/setup-services@main
+        with:
+          services: ${{ inputs.services }}
+          dbSchema: ${{ inputs.dbSchema }}
+
       - uses: jupitermoney/github-workflows/.github/actions/ecr-build-push@main
         with:
           module: ${{ matrix.module }}
@@ -138,8 +161,6 @@ jobs:
           tag-prefix: "rc"
           ecr-registry: ${{ inputs.ecr_registry }}
           java-version: ${{ inputs.java_version }}
-          services: ${{ inputs.services }}
-          dbSchema: ${{ inputs.dbSchema }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
           approval-service-url: ${{ env.APPROVAL_SERVICE_URL }}
@@ -147,6 +168,9 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────
   # OPTIONAL — S3 deploy for Lambda services
+  #
+  # Only runs when s3_deploy: true is passed by the caller.
+  # Builds the deployable JAR via ./devops/build.sh and uploads to S3.
   # ─────────────────────────────────────────────────────────────────
 
   s3-deploy:
@@ -162,8 +186,6 @@ jobs:
       - uses: jupitermoney/github-workflows/.github/actions/s3-deploy@main
         with:
           java-version: ${{ inputs.java_version }}
-          services: ${{ inputs.services }}
-          dbSchema: ${{ inputs.dbSchema }}
           app-module: ${{ matrix.lambda.module }}
           s3-bucket: ${{ inputs.s3_bucket }}
           s3-prefix: ${{ matrix.lambda.s3_prefix }}
