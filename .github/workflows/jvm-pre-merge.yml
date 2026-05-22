@@ -97,7 +97,6 @@ jobs:
 
       - name: Generate Service Metadata
         id: metadata
-        if: inputs.s3_deploy == false
         uses: jupitermoney/github-workflows/.github/actions/generate-metadata@main
 
       # ─────────────── TEST ───────────────
@@ -127,7 +126,6 @@ jobs:
 
   s3-deploy:
     needs: build-test
-    if: inputs.s3_deploy == true
     runs-on: ubuntu-latest
 
     strategy:
@@ -153,7 +151,7 @@ jobs:
 
   build-push:
     needs: build-test
-    if: inputs.publish == true && inputs.s3_deploy == false
+    if: inputs.publish == true
     runs-on: ubuntu-latest
 
     strategy:
