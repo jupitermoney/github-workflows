@@ -26,7 +26,7 @@ runs:
   steps:
     - uses: jupitermoney/github-workflows/.github/actions/gradle-setup@main
       with:
-        java-version: ${{ inputs.java_version }}
+        java-version: ${{ inputs.java-version }}
 
     - name: Configure AWS credentials
       uses: jm-imported-code/configure-aws-credentials@v1
