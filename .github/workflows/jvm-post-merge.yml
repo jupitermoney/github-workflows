@@ -170,7 +170,7 @@ jobs:
   # OPTIONAL — S3 deploy for Lambda services
   #
   # Only runs when s3_deploy: true is passed by the caller.
-  # Builds the deployable JAR via ./devops/build.sh and uploads to S3.
+  # Builds the shadow JAR and uploads it to S3.
   # ─────────────────────────────────────────────────────────────────
 
   s3-deploy:
