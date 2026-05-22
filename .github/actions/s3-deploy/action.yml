@@ -1,0 +1,57 @@
+name: S3 Deploy (Lambda)
+description: Build a shadow JAR and upload it to S3 for Lambda services
+
+inputs:
+  java-version:
+    description: Java version to use
+    required: true
+  app-module:
+    description: Gradle module directory name (e.g. my-app-module) — used to locate the shadowJar output and name the artifact
+    required: true
+  s3-bucket:
+    description: S3 bucket name for Lambda artifact upload
+    required: true
+  s3-prefix:
+    description: S3 key prefix / subdirectory inside the bucket (e.g. my-service-name)
+    required: true
+  aws-access-key-id:
+    description: AWS access key ID
+    required: true
+  aws-secret-access-key:
+    description: AWS secret access key
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: jupitermoney/github-workflows/.github/actions/gradle-setup@main
+      with:
+        java-version: ${{ inputs.java-version }}
+
+    - name: Configure AWS credentials
+      uses: jm-imported-code/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ap-south-1
+
+    - name: Set environment variables
+      shell: bash
+      run: |
+        echo "CI_COMMIT_SHA=$(git rev-parse --short ${GITHUB_SHA})" >> $GITHUB_ENV
+        echo "AWS_S3_BUCKET=${{ inputs.s3-bucket }}" >> $GITHUB_ENV
+
+    - name: Build shadow JAR
+      shell: bash
+      run: |
+        ./gradlew shadowJar
+        cp ./${{ inputs.app-module }}/build/libs/${{ inputs.app-module }}.jar \
+           ./${{ inputs.app-module }}/${{ inputs.app-module }}-${CI_COMMIT_SHA}.jar
+
+    - name: Upload JAR to S3
+      shell: bash
+      run: |
+        pip install --upgrade awscli botocore boto3 urllib3
+        aws s3 cp ./${{ inputs.app-module }}/${{ inputs.app-module }}-${CI_COMMIT_SHA}.jar \
+          s3://${AWS_S3_BUCKET}/${{ inputs.s3-prefix }}/${{ inputs.s3-prefix }}-${CI_COMMIT_SHA}.jar \
+          --acl bucket-owner-full-control

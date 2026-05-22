@@ -32,6 +32,25 @@ on:
         description: The DB schema to create while running the DB
         required: false
 
+      # ───── Lambda / S3 deploy mode ─────
+      s3_deploy:
+        type: boolean
+        default: false
+        description: "Set true for Lambda services — skips generate-metadata and ECR publish"
+
+      s3_bucket:
+        type: string
+        default: ""
+        description: "S3 bucket for Lambda artifact upload (required when s3_deploy: true)"
+
+      app_modules:
+        type: string
+        default: "[]"
+        description: >
+          JSON array of Lambda modules to build and upload (required when s3_deploy: true).
+          Each entry must have 'module' (Gradle module dir) and 's3_prefix' (S3 key prefix).
+          Example: '[{"module":"my-app","s3_prefix":"my-service"}]'
+
 # ─────────────────────────────────────────
 # GLOBAL ENV
 # ─────────────────────────────────────────
@@ -78,6 +97,7 @@ jobs:
 
       - name: Generate Service Metadata
         id: metadata
+        if: inputs.s3_deploy == false
         uses: jupitermoney/github-workflows/.github/actions/generate-metadata@main
 
       # ─────────────── TEST ───────────────
@@ -99,6 +119,32 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   # ─────────────────────────────────────────────────────────────────
+  # OPTIONAL — S3 deploy for Lambda services
+  #
+  # Only runs when s3_deploy: true is passed by the caller.
+  # Builds the shadow JAR and uploads it to S3.
+  # ─────────────────────────────────────────────────────────────────
+
+  s3-deploy:
+    needs: build-test
+    if: inputs.s3_deploy == true
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        lambda: ${{ fromJSON(inputs.app_modules) }}
+
+    steps:
+      - uses: jupitermoney/github-workflows/.github/actions/s3-deploy@main
+        with:
+          java-version: ${{ inputs.java_version }}
+          app-module: ${{ matrix.lambda.module }}
+          s3-bucket: ${{ inputs.s3_bucket }}
+          s3-prefix: ${{ matrix.lambda.s3_prefix }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
+
+  # ─────────────────────────────────────────────────────────────────
   # OPTIONAL — Build and push per module (matrix)
   #
   # Only runs when publish: true is passed by the caller.
@@ -107,7 +153,7 @@ jobs:
 
   build-push:
     needs: build-test
-    if: inputs.publish == true
+    if: inputs.publish == true && inputs.s3_deploy == false
     runs-on: ubuntu-latest
 
     strategy:
