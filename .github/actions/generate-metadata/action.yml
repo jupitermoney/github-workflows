@@ -28,10 +28,6 @@ runs:
         fi
 
         MODULE_COUNT=$(jq '.jibModules | length' "$METADATA_FILE")
-        if [[ "$MODULE_COUNT" -eq 0 ]]; then
-          echo "❌ jibModules array is empty. Nothing to build."
-          exit 1
-        fi
 
         MATRIX=$(jq -c '{include: [.jibModules[] | {module: .module, toImage: .toImage}]}' "$METADATA_FILE")
         echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
