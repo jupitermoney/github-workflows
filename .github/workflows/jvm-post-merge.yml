@@ -29,6 +29,12 @@ on:
         description: The DB schema for create while running the DB
         required: false
 
+      is_library:
+        type: boolean
+        description: "Skip docker build/push for library projects"
+        default: false
+        required: false
+
 # ─────────────────────────────────────────
 # GLOBAL ENV
 # ─────────────────────────────────────────
@@ -118,6 +124,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────
 
   build-push:
+    if: inputs.is_library != true
+  
     needs: test
     runs-on: ubuntu-latest
 
