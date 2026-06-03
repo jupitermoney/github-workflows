@@ -83,7 +83,7 @@ jobs:
       # ─────────────── TEST ───────────────
 
       - name: Build & Test
-        run: ./gradlew build
+        run: ./gradlew clean build
 
       # ─────────────── SONAR (if enabled) ───────────────
 
