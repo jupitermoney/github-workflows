@@ -85,7 +85,7 @@ runs:
       run: |
         MODULE="${{ inputs.module }}"
         [[ "$MODULE" == ":" ]] && MODULE=""
-        ./gradlew "${MODULE}:jibDockerBuild" --build-cache
+        ./gradlew build "${MODULE}:jibDockerBuild"
 
     - name: Tag Image
       shell: bash
