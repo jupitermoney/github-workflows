@@ -104,7 +104,7 @@ jobs:
         if: github.event_name == 'push'
         run: |
           echo "Running build and tests"
-          ./gradlew build --build-cache
+          ./gradlew build
 
       # Runs in the same job so JaCoCo reports from the test step above are
       # already on disk — no need to re-run tests.
