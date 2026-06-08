@@ -35,6 +35,12 @@ on:
         default: false
         required: false
 
+      tag_prefix:
+        type: string
+        description: "Prefix for the Docker image tag (e.g. rc, master)"
+        default: "rc"
+        required: false
+
 # ─────────────────────────────────────────
 # GLOBAL ENV
 # ─────────────────────────────────────────
@@ -145,7 +151,7 @@ jobs:
         with:
           module: ${{ matrix.module }}
           image-name: ${{ matrix.toImage }}
-          tag-prefix: "rc"
+          tag-prefix: ${{ inputs.tag_prefix }}
           ecr-registry: ${{ inputs.ecr_registry }}
           java-version: ${{ inputs.java_version }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
