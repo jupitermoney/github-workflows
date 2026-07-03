@@ -1,0 +1,71 @@
+name: SBT App PR Check
+
+on:
+  workflow_call:
+
+    inputs:
+
+      java_version:
+        type: string
+        default: "21"
+        required: true
+
+      services:
+        type: string
+        description: "Comma-separated list of services to start (e.g., postgres,minio)"
+        default: ""
+        required: false
+
+      dbSchema:
+        type: string
+        description: The DB schema to create while running the DB
+        required: false
+
+env:
+  CI_COMMIT_SHA: ${{ github.sha }}
+  GITHUB_USER: ${{ secrets.CI_GITHUB_USER }}
+  GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+  GITHUB_EVENT: ${{ toJson(github.event) }}
+  ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+  ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+  SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+  REPO_METADATA_TOKEN: ${{ secrets.CI_GITHUB_TOKEN_METADATA_REPO }}
+
+jobs:
+
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Services
+        if: inputs.services != ''
+        uses: jupitermoney/github-workflows/.github/actions/setup-services@main
+        with:
+          services: ${{ inputs.services }}
+          dbSchema: ${{ inputs.dbSchema }}
+
+      - uses: jm-imported-code/checkout@v1
+        with:
+          fetch-depth: 0
+
+      - uses: jm-imported-code/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+
+      - uses: jm-imported-code/cache@v4
+        with:
+          path: |
+            ~/.ivy2/cache
+            ~/.sbt
+            ~/.coursier
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', '**/project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+
+      - name: Build & Test
+        run: sbt compile test
+
+      - name: Run Sonar Analysis
+        run: sbt sonarScanIfEnabled
+        env:
+          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}

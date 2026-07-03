@@ -1,0 +1,157 @@
+name: SBT ECR Publisher
+
+on:
+  workflow_call:
+
+    inputs:
+
+      java_version:
+        type: string
+        default: "21"
+        required: true
+
+      services:
+        type: string
+        description: "Comma-separated list of services to start (e.g., postgres,minio)"
+        default: ""
+        required: false
+
+      dbSchema:
+        type: string
+        description: The DB schema to create while running the DB
+        required: false
+
+      is_library:
+        type: boolean
+        description: "Skip docker build/push for library projects"
+        default: false
+        required: false
+
+      image_name:
+        type: string
+        description: "Docker image name for ECR (e.g. my-service). Required when is_library is false."
+        required: false
+
+      ecr_registry:
+        type: string
+        default: "454518750364.dkr.ecr.ap-south-1.amazonaws.com"
+
+env:
+  ECR_REGISTRY: ${{ inputs.ecr_registry }}
+  APPROVAL_SERVICE_URL: "https://trivy.audit.jupiter.money"
+  APPROVAL_SERVICE_TOKEN: ${{ secrets.APPROVAL_SERVICE_TOKEN }}
+  CI_COMMIT_SHA: ${{ github.sha }}
+  GITHUB_USER: ${{ secrets.CI_GITHUB_USER }}
+  GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+  GITHUB_EVENT: ${{ toJson(github.event) }}
+  ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+  ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+  SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+  REPO_METADATA_TOKEN: ${{ secrets.CI_GITHUB_TOKEN_METADATA_REPO }}
+
+jobs:
+
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Services
+        if: inputs.services != ''
+        uses: jupitermoney/github-workflows/.github/actions/setup-services@main
+        with:
+          services: ${{ inputs.services }}
+          dbSchema: ${{ inputs.dbSchema }}
+
+      - uses: jm-imported-code/checkout@v1
+        with:
+          fetch-depth: 0
+
+      - uses: jm-imported-code/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+
+      - uses: jm-imported-code/cache@v4
+        with:
+          path: |
+            ~/.ivy2/cache
+            ~/.sbt
+            ~/.coursier
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', '**/project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+
+      - name: Build & Test
+        if: github.event_name == 'push'
+        run: sbt compile test
+
+      - name: Run Sonar Analysis
+        if: github.event_name == 'push'
+        run: sbt sonarScanIfEnabled
+        env:
+          SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+
+  build-push:
+    if: inputs.is_library != true
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: jm-imported-code/checkout@v1
+
+      - name: Setup Services
+        if: inputs.services != ''
+        uses: jupitermoney/github-workflows/.github/actions/setup-services@main
+        with:
+          services: ${{ inputs.services }}
+          dbSchema: ${{ inputs.dbSchema }}
+
+      - uses: jm-imported-code/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.java_version }}
+
+      - uses: jm-imported-code/cache@v4
+        with:
+          path: |
+            ~/.ivy2/cache
+            ~/.sbt
+            ~/.coursier
+          key: sbt-${{ runner.os }}-${{ hashFiles('**/build.sbt', '**/project/**') }}
+          restore-keys: sbt-${{ runner.os }}-
+
+      - name: Compute Docker Tag
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == hotfix-* ]]; then
+            echo "DOCKER_IMAGE_TAG=hotfix-$(echo $GITHUB_SHA | cut -c1-8)" >> $GITHUB_ENV
+          else
+            echo "DOCKER_IMAGE_TAG=rc-$(echo $GITHUB_SHA | cut -c1-8)" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials
+        uses: jm-imported-code/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_ACCESS_KEY_SECRET }}
+          aws-region: ap-south-1
+
+      - name: Login to ECR
+        uses: jm-imported-code/amazon-ecr-login@v1.0.1
+        with:
+          registries: ${{ inputs.ecr_registry }}
+
+      - name: Build and push image
+        # Consumer must set in build.sbt:
+        #   jibToImage := s"$ecrRegistry/${name.value}:${sys.env.getOrElse("DOCKER_IMAGE_TAG", version.value)}"
+        # ECR_REGISTRY and DOCKER_IMAGE_TAG are set in the workflow env above.
+        run: sbt jib
+        env:
+          ECR_REGISTRY: ${{ inputs.ecr_registry }}
+          DOCKER_IMAGE_TAG: ${{ env.DOCKER_IMAGE_TAG }}
+
+      - name: Run Trivy Scan
+        uses: jupitermoney/security-automations@main
+        with:
+          tool: trivy
+          image-name: "${{ inputs.ecr_registry }}/${{ inputs.image_name }}:${{ env.DOCKER_IMAGE_TAG }}"
+          approval-service-url: ${{ env.APPROVAL_SERVICE_URL }}
+          approval-service-token: ${{ secrets.APPROVAL_SERVICE_TOKEN }}
